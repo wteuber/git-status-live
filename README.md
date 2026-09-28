@@ -79,11 +79,26 @@ are visible.
 ## Options
 
 ```
-git live [-i interval] [path]
+git live [-i interval] [-u] [path]
 
--i duration   Refresh interval, e.g. 250ms or 2s (default 500ms)
--h            Show help message
-path          Repository to watch (default: current directory)
+-i duration       Refresh interval, e.g. 250ms or 2s (default 500ms)
+-u, --untracked   Show untracked files in new directories
+-h                Show help message
+path              Repository to watch (default: current directory)
+```
+
+By default, like `git status`, a new directory that git doesn't track yet is
+shown as a single entry (`newdir/`). With `-u` or `--untracked`, every file
+inside it is listed (`git status --untracked-files=all`):
+
+```
+git live                    git live -u
+.                           .
+├── newdir (?)              ├── newdir
+└── top.txt (?)             │   ├── sub
+                            │   │   └── b.txt (?)
+                            │   └── a.txt (?)
+                            └── top.txt (?)
 ```
 
 **Note:** Due to how git handles aliases, `git live --help` shows the alias

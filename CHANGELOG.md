@@ -17,3 +17,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - If the directory isn't a git repository, git's error is shown and polling continues until it becomes one.
 - Builds for macOS, Linux and Windows; the only dependencies are `golang.org/x/term` and `golang.org/x/sys`.
 - CI on Linux, macOS and Windows with the minimum and latest Go versions.
+- `-u`/`--untracked` option to show untracked files in new directories individually (`git status --untracked-files=all`) instead of as a single `dir/` entry.
