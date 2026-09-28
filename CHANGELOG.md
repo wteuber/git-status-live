@@ -18,3 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Builds for macOS, Linux and Windows; the only dependencies are `golang.org/x/term` and `golang.org/x/sys`.
 - CI on Linux, macOS and Windows with the minimum and latest Go versions.
 - `-u`/`--untracked` option to show untracked files in new directories individually (`git status --untracked-files=all`) instead of as a single `dir/` entry.
+
+### Changed
+- `-h` prints the help text to stdout instead of stderr.
+
+### Fixed
+- A key pressed right before the input closes is no longer dropped.
