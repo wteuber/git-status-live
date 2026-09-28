@@ -346,7 +346,12 @@ func (a *app) frame() []string {
 		footer := " q quit  t/Tab toggle view  ↑↓/jk scroll  r refresh"
 		if len(body) > bodyH {
 			pos := fmt.Sprintf("%d-%d/%d ", a.scroll+1, min(a.scroll+bodyH, len(body)), len(body))
-			footer = pad(footer, a.width-len(pos)) + pos
+			// Shorten the key hints, not the position, on narrow terminals.
+			w := max(a.width-len(pos), 0)
+			if r := []rune(footer); len(r) >= w {
+				footer = string(r[:max(w-1, 0)])
+			}
+			footer = pad(footer, w) + pos
 		}
 		rows = append(rows, dim(truncate(footer, a.width)))
 	}

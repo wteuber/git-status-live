@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -77,5 +78,51 @@ func TestFrame(t *testing.T) {
 	rows = a.frame()
 	if !strings.Contains(stripANSI(rows[0]), "TREE") || !strings.Contains(stripANSI(rows[3]), "both.go (M+M)") {
 		t.Errorf("tree view bottom:\n%s", plain(rows))
+	}
+}
+
+func TestScroll(t *testing.T) {
+	var many []Entry
+	for i := range 20 {
+		many = append(many, Entry{X: '?', Y: '?', Path: fmt.Sprintf("f%02d", i)})
+	}
+	a := &app{width: 40, height: 7, status: &Status{Branch: "main", Entries: many}}
+	// 5 body rows; the list has a title plus 20 files = 21 lines.
+	firstRow := func() string { a.frame(); return strings.TrimSpace(stripANSI(a.frame()[1])) }
+
+	for _, step := range []struct {
+		key  key
+		want string
+	}{
+		{keyDown, "f00"},
+		{keyDown, "f01"},
+		{keyUp, "f00"},
+		{keyUp, "Untracked files:"},
+		{keyUp, "Untracked files:"}, // can't scroll above the top
+		{keyPageDown, "f04"},
+		{keyPageDown, "f09"},
+		{keyPageUp, "f04"},
+		{keyBottom, "f15"}, // last page shows f15..f19
+		{keyDown, "f15"},   // can't scroll past the end
+		{keyTop, "Untracked files:"},
+	} {
+		a.handleKey(step.key)
+		if got := firstRow(); got != step.want {
+			t.Fatalf("after key %d first row = %q, want %q", step.key, got, step.want)
+		}
+	}
+	if footer := stripANSI(a.frame()[6]); !strings.Contains(footer, "1-5/21") {
+		t.Errorf("footer = %q", footer)
+	}
+}
+
+func TestNarrowFooterKeepsPosition(t *testing.T) {
+	a := &app{width: 30, height: 4, status: &Status{Branch: "main", Entries: sample}}
+	footer := a.frame()[3]
+	if got := stripANSI(footer); !strings.HasSuffix(got, "toggle  1-2/12 ") || visibleLen(got) != 30 {
+		t.Errorf("footer = %q", got)
+	}
+	if strings.Count(footer, ansiReset) != 1 {
+		t.Errorf("footer styling interrupted: %q", footer)
 	}
 }

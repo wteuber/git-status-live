@@ -23,4 +23,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-h` prints the help text to stdout instead of stderr.
 
 ### Fixed
+- On narrow terminals the scroll position (e.g. `1-5/21`) stays visible in the footer; the key hints are shortened instead.
 - A key pressed right before the input closes is no longer dropped.
