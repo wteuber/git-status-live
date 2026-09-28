@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -55,6 +56,14 @@ func TestEntryClassification(t *testing.T) {
 			t.Errorf("%q: staged=%v unstaged=%v untracked=%v unmerged=%v", tc.xy, e.Staged(), e.Unstaged(), e.Untracked(), e.Unmerged())
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	// TestRunStatusGitFailures runs this test binary as a fake git.
+	if os.Getenv("GIT_LIVE_FAKE_GIT") == "silent-failure" {
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
 }
 
 // testRepo creates a git repository with one commit in a temporary directory,
@@ -150,4 +159,32 @@ func TestRunStatus(t *testing.T) {
 
 func sortEntries(entries []Entry) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+}
+
+func TestRunStatusGitFailures(t *testing.T) {
+	// No git on the PATH at all.
+	t.Setenv("PATH", t.TempDir())
+	if st := runStatus(".", false); st.Err == nil || !strings.HasPrefix(st.Err.Error(), "could not run git:") {
+		t.Errorf("missing git error = %v", st.Err)
+	}
+
+	// A git that fails without printing anything: this test binary, renamed,
+	// exits 1 when GIT_LIVE_FAKE_GIT is set (see TestMain).
+	bin := t.TempDir()
+	name := "git"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), self, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("GIT_LIVE_FAKE_GIT", "silent-failure")
+	if st := runStatus(".", false); st.Err == nil || st.Err.Error() != "exit status 1" {
+		t.Errorf("silent git failure error = %v, want exit status 1", st.Err)
+	}
 }
