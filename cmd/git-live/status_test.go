@@ -57,8 +57,11 @@ func TestEntryClassification(t *testing.T) {
 	}
 }
 
-// TestRunStatus runs the real git binary against a temporary repository.
-func TestRunStatus(t *testing.T) {
+// testRepo creates a git repository with one commit in a temporary directory,
+// isolated from the user's git config. It returns the directory and helpers
+// to run git and write files in it.
+func testRepo(t *testing.T) (dir string, git func(args ...string), write func(name, content string)) {
+	t.Helper()
 	// Keep the user's own git config from changing the output. An empty file
 	// works on every OS, unlike os.DevNull ("NUL" on Windows).
 	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
@@ -67,31 +70,38 @@ func TestRunStatus(t *testing.T) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	dir := t.TempDir()
-	gitCmd := func(args ...string) {
+	dir = t.TempDir()
+	git = func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	write := func(name, content string) {
+	write = func(name, content string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gitCmd("init", "-q", "-b", "main")
+	git("init", "-q", "-b", "main")
 	write("old name.txt", "hello\n")
 	write("changed.txt", "one\n")
-	gitCmd("add", ".")
-	gitCmd("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "init")
-	gitCmd("mv", "old name.txt", "new name.txt")
+	git("add", ".")
+	git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "init")
+	return dir, git, write
+}
+
+// TestRunStatus runs the real git binary against a temporary repository.
+func TestRunStatus(t *testing.T) {
+	dir, git, write := testRepo(t)
+	git("mv", "old name.txt", "new name.txt")
 	write("changed.txt", "two\n")
 	write("untracked.txt", "")
-	if err := os.MkdirAll(filepath.Join(dir, "newdir", "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	write(filepath.Join("newdir", "a.txt"), "")
 	write(filepath.Join("newdir", "sub", "b.txt"), "")
 

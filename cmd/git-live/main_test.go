@@ -1,9 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -81,6 +86,268 @@ func TestFrame(t *testing.T) {
 	}
 }
 
+func TestCLI(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		startErr error
+		code     int
+		cfg      *config // nil if start must not be called
+		stdout   string
+		stderr   string
+	}{
+		{name: "defaults", args: nil, code: 0,
+			cfg: &config{dir: ".", interval: 500 * time.Millisecond}},
+		{name: "all options", args: []string{"-i", "250ms", "-u", "repo"}, code: 0,
+			cfg: &config{dir: "repo", interval: 250 * time.Millisecond, untracked: true}},
+		{name: "long untracked", args: []string{"--untracked"}, code: 0,
+			cfg: &config{dir: ".", interval: 500 * time.Millisecond, untracked: true}},
+		{name: "help", args: []string{"-h"}, code: 0, stdout: "Usage: git live"},
+		{name: "unknown flag", args: []string{"-x"}, code: 2, stderr: "git live: flag provided but not defined: -x"},
+		{name: "bad interval", args: []string{"-i", "0s"}, code: 2, stderr: "interval must be positive"},
+		{name: "flag after path", args: []string{"repo", "-u"}, code: 2, stderr: "flags go before the path"},
+		{name: "start fails", args: nil, startErr: errors.New("boom"), code: 1,
+			cfg: &config{dir: ".", interval: 500 * time.Millisecond}, stderr: "git live: boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			var got *config
+			code := cli(tc.args, &stdout, &stderr, func(c config) error {
+				got = &c
+				return tc.startErr
+			})
+			if code != tc.code {
+				t.Errorf("exit code = %d, want %d", code, tc.code)
+			}
+			if !reflect.DeepEqual(got, tc.cfg) {
+				t.Errorf("config = %+v, want %+v", got, tc.cfg)
+			}
+			if !strings.Contains(stdout.String(), tc.stdout) || (tc.stdout == "" && stdout.Len() > 0) {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tc.stdout)
+			}
+			if !strings.Contains(stderr.String(), tc.stderr) || (tc.stderr == "" && stderr.Len() > 0) {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tc.stderr)
+			}
+			if tc.code == 2 && !strings.Contains(stderr.String(), "Usage: git live") {
+				t.Errorf("usage error without usage text: %q", stderr.String())
+			}
+		})
+	}
+}
+
+// countingWriter records every frame the loop writes.
+type countingWriter struct{ frames []string }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.frames = append(w.frames, string(p))
+	return len(p), nil
+}
+
+// loopHarness runs app.loop with channels the test controls. Sends on the
+// unbuffered channels only complete once the loop has finished drawing the
+// previous event, so the test can inspect the output without races after stop.
+type loopHarness struct {
+	results chan Status
+	keys    chan key
+	quit    chan os.Signal
+	tick    chan time.Time
+	kick    chan struct{}
+	width   int
+	out     countingWriter
+	app     *app
+	err     chan error
+}
+
+func startLoop(t *testing.T) *loopHarness {
+	t.Helper()
+	h := &loopHarness{
+		results: make(chan Status),
+		keys:    make(chan key),
+		quit:    make(chan os.Signal),
+		tick:    make(chan time.Time),
+		kick:    make(chan struct{}, 1),
+		width:   60,
+		app:     &app{interval: time.Second},
+		err:     make(chan error, 1),
+	}
+	ev := events{
+		results: h.results, keys: h.keys, quit: h.quit, tick: h.tick, kick: h.kick,
+		size: func() (int, int, error) { return h.width, 8, nil },
+	}
+	go func() { h.err <- h.app.loop(ev, &h.out) }()
+	return h
+}
+
+// stop quits the loop with q and waits for it to return.
+func (h *loopHarness) stop(t *testing.T) {
+	t.Helper()
+	h.keys <- keyQuit
+	if err := <-h.err; err != nil {
+		t.Fatalf("loop returned %v", err)
+	}
+}
+
+func TestLoopRedrawsOnlyOnChange(t *testing.T) {
+	h := startLoop(t)
+	h.results <- Status{Branch: "main", Entries: sample}
+	h.results <- Status{Branch: "main", Entries: sample} // unchanged: no redraw
+	h.tick <- time.Now()                                 // same size: no redraw
+	h.results <- Status{Branch: "main"}                  // repo is now clean
+	h.stop(t)
+
+	if len(h.out.frames) != 2 {
+		t.Fatalf("got %d frames, want 2", len(h.out.frames))
+	}
+	if !strings.Contains(stripANSI(h.out.frames[0]), "4 staged") {
+		t.Errorf("first frame lacks status:\n%s", stripANSI(h.out.frames[0]))
+	}
+	if !strings.Contains(stripANSI(h.out.frames[1]), "nothing to commit") {
+		t.Errorf("second frame not clean:\n%s", stripANSI(h.out.frames[1]))
+	}
+}
+
+func TestLoopResize(t *testing.T) {
+	h := startLoop(t)
+	h.results <- Status{Branch: "main"}
+	h.width = 40 // read by the loop only on the next tick
+	h.tick <- time.Now()
+	h.stop(t)
+	if h.app.width != 40 || len(h.out.frames) != 2 {
+		t.Errorf("width = %d, frames = %d; want 40, 2", h.app.width, len(h.out.frames))
+	}
+}
+
+func TestLoopKeys(t *testing.T) {
+	h := startLoop(t)
+	h.results <- Status{Branch: "main", Entries: sample}
+	h.keys <- keyToggle
+	h.keys <- keyRefresh
+	h.keys <- keyRefresh // a refresh is already pending: must not block
+	h.stop(t)
+
+	if h.app.view != treeView || !strings.Contains(stripANSI(h.out.frames[len(h.out.frames)-1]), "TREE") {
+		t.Error("toggle did not switch to the tree view")
+	}
+	select {
+	case <-h.kick:
+	default:
+		t.Error("r did not request a refresh")
+	}
+}
+
+func TestLoopQuitsOnSignal(t *testing.T) {
+	h := startLoop(t)
+	h.quit <- os.Interrupt
+	if err := <-h.err; err != nil {
+		t.Fatalf("loop returned %v", err)
+	}
+}
+
+func TestLoopWriteError(t *testing.T) {
+	a := &app{}
+	results := make(chan Status, 1)
+	results <- Status{}
+	err := a.loop(events{
+		results: results,
+		size:    func() (int, int, error) { return 20, 5, nil },
+	}, failingWriter{})
+	if err == nil || err.Error() != "disk full" {
+		t.Errorf("loop error = %v, want disk full", err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestPoll(t *testing.T) {
+	var calls, running, overlaps atomic.Int32
+	status := func() Status {
+		if running.Add(1) > 1 {
+			overlaps.Add(1)
+		}
+		defer running.Add(-1)
+		time.Sleep(time.Millisecond)
+		return Status{Branch: fmt.Sprint(calls.Add(1))}
+	}
+	results := make(chan Status)
+	kick := make(chan struct{}, 1)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() { poll(status, time.Hour, results, kick, done); close(finished) }()
+
+	if st := <-results; st.Branch != "1" {
+		t.Fatalf("first result = %q", st.Branch)
+	}
+	// The interval is an hour, so a second result can only come from the kick.
+	kick <- struct{}{}
+	select {
+	case st := <-results:
+		if st.Branch != "2" {
+			t.Errorf("second result = %q", st.Branch)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("kick did not trigger a refresh")
+	}
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll did not stop when done was closed")
+	}
+	if overlaps.Load() > 0 {
+		t.Error("status calls overlapped")
+	}
+}
+
+func TestPollInterval(t *testing.T) {
+	results := make(chan Status)
+	done := make(chan struct{})
+	defer close(done)
+	go poll(func() Status { return Status{} }, 10*time.Millisecond, results, nil, done)
+	start := time.Now()
+	for range 3 {
+		<-results
+	}
+	if d := time.Since(start); d < 20*time.Millisecond {
+		t.Errorf("3 results after %s, want at least 2 intervals (20ms)", d)
+	}
+}
+
+func TestReadKeys(t *testing.T) {
+	keys := make(chan key, 10)
+	readKeys(strings.NewReader("tj"), keys)
+	close(keys)
+	var got []key
+	for k := range keys {
+		got = append(got, k)
+	}
+	// End of input quits, so a closed terminal can't leave git-live hanging.
+	want := []key{keyToggle, keyDown, keyQuit}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("keys = %v, want %v", got, want)
+	}
+}
+
+func TestDecodeKeysMore(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want []key
+	}{
+		{"\x1bOA\x1bOB", []key{keyUp, keyDown}}, // application cursor mode
+		{"\x1b[H\x1b[F\x1b[1~\x1b[4~", []key{keyTop, keyBottom, keyTop, keyBottom}},
+		{"rR Q\x03", []key{keyRefresh, keyRefresh, keyPageDown, keyQuit, keyQuit}},
+		{"\x1b[", nil},                // incomplete sequence at the end of a read
+		{"\x1b[12", nil},              // digits without a final byte
+		{"\x1b[Zt", []key{keyToggle}}, // unknown sequence (Shift-Tab) is skipped
+		{"x\x1b", nil},                // unmapped key and lone Escape
+	} {
+		if got := decodeKeys([]byte(tc.in)); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("decodeKeys(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestScroll(t *testing.T) {
 	var many []Entry
 	for i := range 20 {
@@ -116,6 +383,35 @@ func TestScroll(t *testing.T) {
 	}
 }
 
+func TestErrorScreen(t *testing.T) {
+	a := &app{width: 80, height: 6, interval: 500 * time.Millisecond,
+		status: &Status{Err: errors.New("fatal: not a git repository (or any of the parent directories): .git")}}
+	rows := a.frame()
+	if h := stripANSI(rows[0]); strings.Contains(h, "│") {
+		t.Errorf("header shows repo details on error: %q", h)
+	}
+	if got := stripANSI(rows[1]); !strings.HasPrefix(got, "fatal: not a git repository") {
+		t.Errorf("error row = %q", got)
+	}
+	if !strings.HasPrefix(rows[1], ansiRed) {
+		t.Error("error is not red")
+	}
+	if got := stripANSI(rows[3]); got != "Retrying every 500ms…" {
+		t.Errorf("retry row = %q", got)
+	}
+}
+
+func TestTinyTerminal(t *testing.T) {
+	a := &app{status: &Status{Branch: "main"}}
+	if rows := a.frame(); rows != nil {
+		t.Errorf("zero-size terminal drew %d rows", len(rows))
+	}
+	a.width, a.height = 10, 1
+	if rows := a.frame(); len(rows) != 2 { // header and one body row, no footer
+		t.Errorf("1-row terminal drew %d rows", len(rows))
+	}
+}
+
 func TestNarrowFooterKeepsPosition(t *testing.T) {
 	a := &app{width: 30, height: 4, status: &Status{Branch: "main", Entries: sample}}
 	footer := a.frame()[3]
@@ -124,5 +420,99 @@ func TestNarrowFooterKeepsPosition(t *testing.T) {
 	}
 	if strings.Count(footer, ansiReset) != 1 {
 		t.Errorf("footer styling interrupted: %q", footer)
+	}
+}
+
+func TestPollStopsWhileDelivering(t *testing.T) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	// Nobody reads results, so poll blocks delivering the first one.
+	go func() {
+		poll(func() Status { return Status{} }, time.Hour, make(chan Status), nil, done)
+		close(finished)
+	}()
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll did not stop while waiting to deliver a result")
+	}
+}
+
+// screen collects the frames runApp draws and lets a test wait for one.
+type screen struct {
+	mu     sync.Mutex
+	frames []string
+	added  chan struct{}
+}
+
+func (s *screen) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	s.frames = append(s.frames, stripANSI(string(p)))
+	s.mu.Unlock()
+	select {
+	case s.added <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+// waitFor waits until the latest frame contains all of want.
+func (s *screen) waitFor(t *testing.T, want ...string) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		s.mu.Lock()
+		var last string
+		if len(s.frames) > 0 {
+			last = s.frames[len(s.frames)-1]
+		}
+		s.mu.Unlock()
+		ok := true
+		for _, w := range want {
+			ok = ok && strings.Contains(last, w)
+		}
+		if ok {
+			return
+		}
+		select {
+		case <-s.added:
+		case <-deadline:
+			t.Fatalf("screen never showed %q; last frame:\n%s", want, last)
+		}
+	}
+}
+
+// TestRunApp runs the whole app, minus the terminal setup, against a real
+// repository: real git polling, real key input and the real main loop.
+func TestRunApp(t *testing.T) {
+	dir, git, write := testRepo(t)
+	in, keys := io.Pipe()
+	defer keys.Close()
+	scr := &screen{added: make(chan struct{}, 1)}
+	size := func() (int, int, error) { return 80, 12, nil }
+	cfg := config{dir: dir, interval: 20 * time.Millisecond}
+	errc := make(chan error, 1)
+	go func() { errc <- runApp(cfg, in, scr, size, nil, nil) }()
+
+	scr.waitFor(t, "LIST", "main", "nothing to commit")
+
+	// Changes made while it runs show up without any key press.
+	write("changed.txt", "two\n")
+	scr.waitFor(t, "1 unstaged", "modified:   changed.txt")
+	git("add", "changed.txt")
+	scr.waitFor(t, "1 staged", "Changes to be committed:")
+
+	io.WriteString(keys, "t")
+	scr.waitFor(t, "TREE", "changed.txt (M+)")
+
+	io.WriteString(keys, "q")
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("runApp returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("q did not quit")
 	}
 }
