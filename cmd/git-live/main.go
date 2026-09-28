@@ -46,11 +46,19 @@ type app struct {
 }
 
 func main() {
-	interval := flag.Duration("i", 500*time.Millisecond, "refresh interval")
+	interval := flag.Duration("i", 500*time.Millisecond, "")
+	var untracked bool
+	flag.BoolVar(&untracked, "u", false, "")
+	flag.BoolVar(&untracked, "untracked", false, "")
 	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), "Usage: git live [-i interval] [path]\n\n")
-		fmt.Fprintln(flag.CommandLine.Output(), "Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refresh.")
-		flag.PrintDefaults()
+		fmt.Fprint(flag.CommandLine.Output(), `Usage: git live [-i interval] [-u] [path]
+
+Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refresh.
+
+  -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
+  -u, --untracked    show untracked files in new directories
+  -h                 show this help
+`)
 	}
 	flag.Parse()
 	dir, err := parseArgs(flag.Args(), *interval)
@@ -59,7 +67,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := run(dir, *interval); err != nil {
+	if err := run(dir, *interval, untracked); err != nil {
 		fmt.Fprintln(os.Stderr, "git live:", err)
 		os.Exit(1)
 	}
@@ -79,7 +87,9 @@ func parseArgs(args []string, interval time.Duration) (string, error) {
 	return "", fmt.Errorf("expected at most one path, got %q (flags go before the path)", args)
 }
 
-func run(dir string, interval time.Duration) error {
+// run shows the live view until the user quits. With untracked set, new
+// directories are listed file by file instead of as a single entry.
+func run(dir string, interval time.Duration, untracked bool) error {
 	inFd, outFd := int(os.Stdin.Fd()), int(os.Stdout.Fd())
 	if !term.IsTerminal(inFd) || !term.IsTerminal(outFd) {
 		return fmt.Errorf("stdin and stdout must be a terminal")
@@ -100,7 +110,7 @@ func run(dir string, interval time.Duration) error {
 
 	results := make(chan Status)
 	kick := make(chan struct{}, 1)
-	go poll(dir, interval, results, kick)
+	go poll(dir, untracked, interval, results, kick)
 	keys := make(chan key)
 	go readKeys(keys)
 	sigs := make(chan os.Signal, 1)
@@ -141,9 +151,9 @@ func run(dir string, interval time.Duration) error {
 
 // poll runs git status repeatedly, never overlapping runs, waiting interval
 // between them. A send on kick skips the wait.
-func poll(dir string, interval time.Duration, results chan<- Status, kick <-chan struct{}) {
+func poll(dir string, untracked bool, interval time.Duration, results chan<- Status, kick <-chan struct{}) {
 	for {
-		results <- runStatus(dir)
+		results <- runStatus(dir, untracked)
 		select {
 		case <-time.After(interval):
 		case <-kick:

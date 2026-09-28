@@ -89,8 +89,13 @@ func TestRunStatus(t *testing.T) {
 	gitCmd("mv", "old name.txt", "new name.txt")
 	write("changed.txt", "two\n")
 	write("untracked.txt", "")
+	if err := os.MkdirAll(filepath.Join(dir, "newdir", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join("newdir", "a.txt"), "")
+	write(filepath.Join("newdir", "sub", "b.txt"), "")
 
-	st := runStatus(dir)
+	st := runStatus(dir, false)
 	if st.Err != nil {
 		t.Fatal(st.Err)
 	}
@@ -100,17 +105,39 @@ func TestRunStatus(t *testing.T) {
 	want := []Entry{
 		{X: ' ', Y: 'M', Path: "changed.txt"},
 		{X: 'R', Y: ' ', Path: "new name.txt", OrigPath: "old name.txt"},
+		{X: '?', Y: '?', Path: "newdir/"},
 		{X: '?', Y: '?', Path: "untracked.txt"},
 	}
-	sort.Slice(st.Entries, func(i, j int) bool { return st.Entries[i].Path < st.Entries[j].Path })
+	sortEntries(st.Entries)
 	if !reflect.DeepEqual(st.Entries, want) {
 		t.Errorf("entries =\n%+v\nwant\n%+v", st.Entries, want)
+	}
+
+	// With untracked, files in new directories are listed one by one.
+	st = runStatus(dir, true)
+	if st.Err != nil {
+		t.Fatal(st.Err)
+	}
+	want = []Entry{
+		{X: ' ', Y: 'M', Path: "changed.txt"},
+		{X: 'R', Y: ' ', Path: "new name.txt", OrigPath: "old name.txt"},
+		{X: '?', Y: '?', Path: "newdir/a.txt"},
+		{X: '?', Y: '?', Path: "newdir/sub/b.txt"},
+		{X: '?', Y: '?', Path: "untracked.txt"},
+	}
+	sortEntries(st.Entries)
+	if !reflect.DeepEqual(st.Entries, want) {
+		t.Errorf("untracked entries =\n%+v\nwant\n%+v", st.Entries, want)
 	}
 
 	// Stop git from finding a repository above the temp dir.
 	notRepo := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
-	if st := runStatus(notRepo); st.Err == nil || !strings.Contains(st.Err.Error(), "not a git repository") {
+	if st := runStatus(notRepo, false); st.Err == nil || !strings.Contains(st.Err.Error(), "not a git repository") {
 		t.Errorf("non-repo error = %v", st.Err)
 	}
+}
+
+func sortEntries(entries []Entry) {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 }

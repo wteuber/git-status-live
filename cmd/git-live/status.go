@@ -44,9 +44,15 @@ func (e Entry) Unstaged() bool {
 	return !e.Untracked() && !e.Ignored() && !e.Unmerged() && e.Y != ' '
 }
 
-// runStatus runs git status in dir and parses the result.
-func runStatus(dir string) Status {
-	cmd := exec.Command("git", "-C", dir, "status", "--porcelain=v1", "-z", "--branch")
+// runStatus runs git status in dir and parses the result. With untracked set,
+// files inside untracked directories are listed individually
+// (--untracked-files=all) instead of as one "dir/" entry.
+func runStatus(dir string, untracked bool) Status {
+	args := []string{"-C", dir, "status", "--porcelain=v1", "-z", "--branch"}
+	if untracked {
+		args = append(args, "--untracked-files=all")
+	}
+	cmd := exec.Command("git", args...)
 	// Never take index.lock while polling, so we can't get in the way of
 	// git commands the user runs at the same time.
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
