@@ -1,0 +1,3 @@
+# Binary built by `go build ./cmd/git-live`
+/git-live
+/git-live.exe
