@@ -188,8 +188,10 @@ ___
    * `git clone https://github.com/wteuber/git-status-live.git`
    * `cd git-status-live`
 2. Run tests
-   * `go test ./...` - Run all tests, including an integration test that runs
-     the real `git` binary against a temporary repository
+   * `go test ./...` - Run all tests, including end-to-end tests that run the
+     real `git` binary against a temporary repository
+   * `go test -race -cover ./...` - Run them with the race detector and print
+     coverage (what the CI coverage job does)
    * `go vet ./...` - Run static checks
    * `gofmt -l .` - List files that need formatting (CI requires none)
 3. Run git-status-live from the repository
@@ -198,7 +200,14 @@ ___
    * `go install ./cmd/git-live`
 
 CI runs vet, tests and a build on Linux, macOS and Windows, against both the
-minimum Go version and the latest release.
+minimum Go version and the latest release, and fails if test coverage drops
+below 89%.
+
+Everything is tested except the terminal setup itself (raw mode, the alternate
+screen, and the Windows console mode), which needs a real terminal. The code
+behind it is split so that it can be tested without one: the main loop takes
+its keys, git results and output as parameters, and one test drives the whole
+app, from `git status` polling to key presses, against a real repository.
 
 ## License
 
