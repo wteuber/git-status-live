@@ -1,0 +1,116 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+)
+
+func TestParsePorcelain(t *testing.T) {
+	out := strings.Join([]string{
+		"## main...origin/main [ahead 1, behind 2]",
+		"M  staged.go",
+		" M unstaged.go",
+		"MM both.go",
+		"R  new name.go", "old name.go",
+		"?? untracked dir/",
+		"UU conflict.go",
+		"",
+	}, "\x00")
+	branch, entries := parsePorcelain([]byte(out))
+	if branch != "main...origin/main [ahead 1, behind 2]" {
+		t.Errorf("branch = %q", branch)
+	}
+	want := []Entry{
+		{X: 'M', Y: ' ', Path: "staged.go"},
+		{X: ' ', Y: 'M', Path: "unstaged.go"},
+		{X: 'M', Y: 'M', Path: "both.go"},
+		{X: 'R', Y: ' ', Path: "new name.go", OrigPath: "old name.go"},
+		{X: '?', Y: '?', Path: "untracked dir/"},
+		{X: 'U', Y: 'U', Path: "conflict.go"},
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("entries =\n%+v\nwant\n%+v", entries, want)
+	}
+}
+
+func TestEntryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		xy                                    string
+		staged, unstaged, untracked, unmerged bool
+	}{
+		{"M ", true, false, false, false},
+		{" M", false, true, false, false},
+		{"MM", true, true, false, false},
+		{"??", false, false, true, false},
+		{"UU", false, false, false, true},
+		{"AA", false, false, false, true},
+	} {
+		e := Entry{X: tc.xy[0], Y: tc.xy[1]}
+		if e.Staged() != tc.staged || e.Unstaged() != tc.unstaged || e.Untracked() != tc.untracked || e.Unmerged() != tc.unmerged {
+			t.Errorf("%q: staged=%v unstaged=%v untracked=%v unmerged=%v", tc.xy, e.Staged(), e.Unstaged(), e.Untracked(), e.Unmerged())
+		}
+	}
+}
+
+// TestRunStatus runs the real git binary against a temporary repository.
+func TestRunStatus(t *testing.T) {
+	// Keep the user's own git config from changing the output. An empty file
+	// works on every OS, unlike os.DevNull ("NUL" on Windows).
+	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := t.TempDir()
+	gitCmd := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCmd("init", "-q", "-b", "main")
+	write("old name.txt", "hello\n")
+	write("changed.txt", "one\n")
+	gitCmd("add", ".")
+	gitCmd("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "init")
+	gitCmd("mv", "old name.txt", "new name.txt")
+	write("changed.txt", "two\n")
+	write("untracked.txt", "")
+
+	st := runStatus(dir)
+	if st.Err != nil {
+		t.Fatal(st.Err)
+	}
+	if st.Branch != "main" {
+		t.Errorf("branch = %q, want main", st.Branch)
+	}
+	want := []Entry{
+		{X: ' ', Y: 'M', Path: "changed.txt"},
+		{X: 'R', Y: ' ', Path: "new name.txt", OrigPath: "old name.txt"},
+		{X: '?', Y: '?', Path: "untracked.txt"},
+	}
+	sort.Slice(st.Entries, func(i, j int) bool { return st.Entries[i].Path < st.Entries[j].Path })
+	if !reflect.DeepEqual(st.Entries, want) {
+		t.Errorf("entries =\n%+v\nwant\n%+v", st.Entries, want)
+	}
+
+	// Stop git from finding a repository above the temp dir.
+	notRepo := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
+	if st := runStatus(notRepo); st.Err == nil || !strings.Contains(st.Err.Error(), "not a git repository") {
+		t.Errorf("non-repo error = %v", st.Err)
+	}
+}
