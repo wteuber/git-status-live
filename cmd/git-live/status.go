@@ -77,6 +77,16 @@ func runStatus(dir string, untracked bool) Status {
 	return st
 }
 
+// gitConfig returns the value of a git config key as seen from dir, or "" if
+// it isn't set or git can't read it.
+func gitConfig(dir, key string) string {
+	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // parsePorcelain parses the output of `git status --porcelain=v1 -z --branch`.
 func parsePorcelain(out []byte) (branch string, entries []Entry) {
 	fields := strings.Split(string(out), "\x00")

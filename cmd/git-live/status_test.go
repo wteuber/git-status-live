@@ -66,19 +66,25 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// testRepo creates a git repository with one commit in a temporary directory,
-// isolated from the user's git config. It returns the directory and helpers
-// to run git and write files in it.
-func testRepo(t *testing.T) (dir string, git func(args ...string), write func(name, content string)) {
+// isolateGitConfig keeps the user's global and system git config from
+// changing the output of git in this test.
+func isolateGitConfig(t *testing.T) {
 	t.Helper()
-	// Keep the user's own git config from changing the output. An empty file
-	// works on every OS, unlike os.DevNull ("NUL" on Windows).
+	// An empty file works on every OS, unlike os.DevNull ("NUL" on Windows).
 	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
 	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+// testRepo creates a git repository with one commit in a temporary directory,
+// isolated from the user's git config. It returns the directory and helpers
+// to run git and write files in it.
+func testRepo(t *testing.T) (dir string, git func(args ...string), write func(name, content string)) {
+	t.Helper()
+	isolateGitConfig(t)
 	dir = t.TempDir()
 	git = func(args ...string) {
 		t.Helper()
@@ -154,6 +160,20 @@ func TestRunStatus(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
 	if st := runStatus(notRepo, false); st.Err == nil || !strings.Contains(st.Err.Error(), "not a git repository") {
 		t.Errorf("non-repo error = %v", st.Err)
+	}
+}
+
+func TestGitConfig(t *testing.T) {
+	dir, git, _ := testRepo(t)
+	if got := gitConfig(dir, "live.view"); got != "" {
+		t.Errorf("unset key = %q, want empty", got)
+	}
+	git("config", "live.view", "tree")
+	if got := gitConfig(dir, "live.view"); got != "tree" {
+		t.Errorf("live.view = %q, want tree", got)
+	}
+	if got := gitConfig(filepath.Join(dir, "missing"), "live.view"); got != "" {
+		t.Errorf("missing directory = %q, want empty", got)
 	}
 }
 

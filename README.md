@@ -20,7 +20,8 @@ ___
 - **Live:** polls `git status` every 500ms (configurable) and redraws only when
   something changes, so the screen stays perfectly still while you work.
 - **Two views:** a grouped list exactly like `git status`, and a colored file
-  tree like `git tree`. Toggle with `t` or `Tab`.
+  tree like `git tree`. Toggle with `t` or `Tab`, and choose the one to start
+  in with `--view` or `git config live.view`.
 - **Safe to leave running:** runs git with `GIT_OPTIONAL_LOCKS=0`, so it never
   takes `index.lock` and never gets in the way of your own `git` commands.
 - **Kind to big repos:** runs never overlap; on a slow repo it simply checks
@@ -76,12 +77,13 @@ are visible.
 ## Options
 
 ```
-git live [-i interval] [-u] [path]
+git live [-i interval] [-u] [--view list|tree] [path]
 
--i duration       Refresh interval, e.g. 250ms or 2s (default 500ms)
--u, --untracked   Show untracked files in new directories
--h                Show help message
-path              Repository to watch (default: current directory)
+-i duration        Refresh interval, e.g. 250ms or 2s (default 500ms)
+-u, --untracked    Show untracked files in new directories
+--view list|tree   View to start in (default: git config live.view, or list)
+-h                 Show help message
+path               Repository to watch (default: current directory)
 ```
 
 By default, like `git status`, a new directory that git doesn't track yet is
@@ -101,6 +103,17 @@ git live                    git live -u
 **Note:** Due to how git handles aliases, `git live --help` shows the alias
 expansion instead of the help message. Use `git live -h` to see the help
 message.
+
+## Configuration
+
+To always start in the tree view, set `live.view` in your git config:
+
+```
+git config --global live.view tree
+```
+
+Leave out `--global` to set it for the current repository only. `--view`
+overrides it for a single run, e.g. `git live --view list`.
 
 ## Try it
 
