@@ -94,3 +94,70 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate = %q", got)
 	}
 }
+
+var conflicts = []Entry{
+	{X: 'U', Y: 'U', Path: "src/both.go"},
+	{X: 'A', Y: 'A', Path: "added.go"},
+	{X: 'D', Y: 'U', Path: "gone.go"},
+}
+
+func TestConflictsInList(t *testing.T) {
+	want := `Unmerged paths:
+        both modified:   src/both.go
+        both added:      added.go
+        deleted by us:   gone.go`
+	if got := plain(renderList(conflicts)); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	if got := counts(conflicts); got != "3 conflicts" {
+		t.Errorf("counts = %q", got)
+	}
+}
+
+func TestConflictsInTree(t *testing.T) {
+	lines := renderTree(conflicts)
+	want := `.
+├── src
+│   └── both.go (UU)
+├── added.go (AA)
+└── gone.go (DU)`
+	if got := plain(lines); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	if !strings.HasSuffix(lines[2], red("both.go (UU)")) {
+		t.Errorf("conflict is not red: %q", lines[2])
+	}
+}
+
+func TestTypeChangeAndUnknownCodes(t *testing.T) {
+	entries := []Entry{
+		{X: 'T', Y: ' ', Path: "link"},
+		{X: ' ', Y: 'X', Path: "future"}, // a code git might add one day
+	}
+	want := `Changes to be committed:
+        typechange: link
+
+Changes not staged for commit:
+        X:          future`
+	if got := plain(renderList(entries)); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	if got := plain(renderTree(entries)); got != ".\n├── future (X)\n└── link (T+)" {
+		t.Errorf("tree = %q", got)
+	}
+}
+
+func TestStripANSIEdgeCases(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\x1b[1;34mb\x1b[0m": "ab",
+		"a\x1bb":              "ab", // Escape not followed by [ is dropped alone
+		"a\x1b[31":            "a",  // unterminated sequence at the end
+	} {
+		if got := stripANSI(in); got != want {
+			t.Errorf("stripANSI(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := pad("toolong", 3); got != "toolong" {
+		t.Errorf("pad shortened its input: %q", got)
+	}
+}

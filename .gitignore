@@ -1,3 +1,6 @@
 # Binary built by `go build ./cmd/git-live`
 /git-live
 /git-live.exe
+
+# Coverage profile from `go test -coverprofile`
+/coverage.out

@@ -3,8 +3,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,7 +38,6 @@ const (
 )
 
 type app struct {
-	dir      string
 	interval time.Duration
 	status   *Status // nil until the first run finishes
 	view     view
@@ -45,32 +46,53 @@ type app struct {
 	height   int
 }
 
-func main() {
-	interval := flag.Duration("i", 500*time.Millisecond, "")
-	var untracked bool
-	flag.BoolVar(&untracked, "u", false, "")
-	flag.BoolVar(&untracked, "untracked", false, "")
-	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), `Usage: git live [-i interval] [-u] [path]
+// config is what the command line asks for.
+type config struct {
+	dir       string
+	interval  time.Duration
+	untracked bool
+}
+
+const usage = `Usage: git live [-i interval] [-u] [path]
 
 Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refresh.
 
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
   -u, --untracked    show untracked files in new directories
   -h                 show this help
-`)
+`
+
+func main() {
+	os.Exit(cli(os.Args[1:], os.Stdout, os.Stderr, runTerminal))
+}
+
+// cli parses args, calls start with the resulting config and returns the
+// process exit code: 0 on success or -h, 1 if start fails, 2 for bad usage.
+func cli(args []string, stdout, stderr io.Writer, start func(config) error) int {
+	fs := flag.NewFlagSet("git live", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // errors and usage are printed below
+	cfg := config{}
+	fs.DurationVar(&cfg.interval, "i", 500*time.Millisecond, "")
+	fs.BoolVar(&cfg.untracked, "u", false, "")
+	fs.BoolVar(&cfg.untracked, "untracked", false, "")
+	err := fs.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprint(stdout, usage)
+		return 0
 	}
-	flag.Parse()
-	dir, err := parseArgs(flag.Args(), *interval)
+	if err == nil {
+		cfg.dir, err = parseArgs(fs.Args(), cfg.interval)
+	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "git live:", err)
-		flag.Usage()
-		os.Exit(2)
+		fmt.Fprintln(stderr, "git live:", err)
+		fmt.Fprint(stderr, usage)
+		return 2
 	}
-	if err := run(dir, *interval, untracked); err != nil {
-		fmt.Fprintln(os.Stderr, "git live:", err)
-		os.Exit(1)
+	if err := start(cfg); err != nil {
+		fmt.Fprintln(stderr, "git live:", err)
+		return 1
 	}
+	return 0
 }
 
 // parseArgs validates the command line and returns the directory to watch.
@@ -87,9 +109,9 @@ func parseArgs(args []string, interval time.Duration) (string, error) {
 	return "", fmt.Errorf("expected at most one path, got %q (flags go before the path)", args)
 }
 
-// run shows the live view until the user quits. With untracked set, new
-// directories are listed file by file instead of as a single entry.
-func run(dir string, interval time.Duration, untracked bool) error {
+// runTerminal sets up the terminal and shows the live view until the user
+// quits. Everything after the setup happens in runApp.
+func runTerminal(cfg config) error {
 	inFd, outFd := int(os.Stdin.Fd()), int(os.Stdout.Fd())
 	if !term.IsTerminal(inFd) || !term.IsTerminal(outFd) {
 		return fmt.Errorf("stdin and stdout must be a terminal")
@@ -105,73 +127,116 @@ func run(dir string, interval time.Duration, untracked bool) error {
 	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l\x1b[?7l")
 	defer os.Stdout.WriteString("\x1b[?7h\x1b[?25h\x1b[?1049l")
 
-	a := &app{dir: dir, interval: interval}
-	a.width, a.height, _ = term.GetSize(outFd)
-
-	results := make(chan Status)
-	kick := make(chan struct{}, 1)
-	go poll(dir, untracked, interval, results, kick)
-	keys := make(chan key)
-	go readKeys(keys)
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	// Windows has no SIGWINCH, so poll the terminal size instead.
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	size := func() (int, int, error) { return term.GetSize(outFd) }
+	return runApp(cfg, os.Stdin, os.Stdout, size, quit, ticker.C)
+}
+
+// runApp connects git polling and key input to the main loop and runs it
+// until the user quits. It reads keys from in and draws to out.
+func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, error), quit <-chan os.Signal, tick <-chan time.Time) error {
+	done := make(chan struct{})
+	defer close(done)
+	results := make(chan Status)
+	kick := make(chan struct{}, 1)
+	status := func() Status { return runStatus(cfg.dir, cfg.untracked) }
+	go poll(status, cfg.interval, results, kick, done)
+	keys := make(chan key)
+	go readKeys(in, keys)
+
+	a := &app{interval: cfg.interval}
+	return a.loop(events{
+		results: results,
+		keys:    keys,
+		quit:    quit,
+		tick:    tick,
+		size:    size,
+		kick:    kick,
+	}, out)
+}
+
+// events are the inputs of the main loop.
+type events struct {
+	results <-chan Status
+	keys    <-chan key
+	quit    <-chan os.Signal
+	tick    <-chan time.Time // when to check the terminal size
+	size    func() (width, height int, err error)
+	kick    chan<- struct{} // asks poll for a refresh now
+}
+
+// loop handles events until the user quits, writing a frame to out only
+// when the screen content changed.
+func (a *app) loop(ev events, out io.Writer) error {
+	if w, h, err := ev.size(); err == nil {
+		a.width, a.height = w, h
+	}
 	var last string
 	for {
 		select {
-		case st := <-results:
+		case st := <-ev.results:
 			a.status = &st
-		case k := <-keys:
+		case k := <-ev.keys:
 			if k == keyQuit {
 				return nil
 			}
 			if k == keyRefresh {
 				select {
-				case kick <- struct{}{}:
-				default:
+				case ev.kick <- struct{}{}:
+				default: // a refresh is already pending
 				}
 			}
 			a.handleKey(k)
-		case <-ticker.C:
-			if w, h, err := term.GetSize(outFd); err == nil {
+		case <-ev.tick:
+			if w, h, err := ev.size(); err == nil {
 				a.width, a.height = w, h
 			}
-		case <-sigs:
+		case <-ev.quit:
 			return nil
 		}
 		if frame := a.draw(); frame != last {
-			os.Stdout.WriteString(frame)
+			if _, err := io.WriteString(out, frame); err != nil {
+				return err
+			}
 			last = frame
 		}
 	}
 }
 
-// poll runs git status repeatedly, never overlapping runs, waiting interval
-// between them. A send on kick skips the wait.
-func poll(dir string, untracked bool, interval time.Duration, results chan<- Status, kick <-chan struct{}) {
+// poll calls status repeatedly, never overlapping calls, waiting interval
+// between them. A send on kick skips the wait; closing done stops it.
+func poll(status func() Status, interval time.Duration, results chan<- Status, kick <-chan struct{}, done <-chan struct{}) {
 	for {
-		results <- runStatus(dir, untracked)
+		select {
+		case results <- status():
+		case <-done:
+			return
+		}
 		select {
 		case <-time.After(interval):
 		case <-kick:
+		case <-done:
+			return
 		}
 	}
 }
 
-// readKeys decodes raw terminal input into keys.
-func readKeys(keys chan<- key) {
+// readKeys decodes raw terminal input from r into keys. When r fails or
+// ends, it sends keyQuit.
+func readKeys(r io.Reader, keys chan<- key) {
 	buf := make([]byte, 64)
 	for {
-		n, err := os.Stdin.Read(buf)
+		n, err := r.Read(buf)
+		for _, k := range decodeKeys(buf[:n]) {
+			keys <- k
+		}
 		if err != nil {
 			keys <- keyQuit
 			return
-		}
-		for _, k := range decodeKeys(buf[:n]) {
-			keys <- k
 		}
 	}
 }
@@ -281,7 +346,12 @@ func (a *app) frame() []string {
 		footer := " q quit  t/Tab toggle view  ↑↓/jk scroll  r refresh"
 		if len(body) > bodyH {
 			pos := fmt.Sprintf("%d-%d/%d ", a.scroll+1, min(a.scroll+bodyH, len(body)), len(body))
-			footer = pad(footer, a.width-len(pos)) + pos
+			// Shorten the key hints, not the position, on narrow terminals.
+			w := max(a.width-len(pos), 0)
+			if r := []rune(footer); len(r) >= w {
+				footer = string(r[:max(w-1, 0)])
+			}
+			footer = pad(footer, w) + pos
 		}
 		rows = append(rows, dim(truncate(footer, a.width)))
 	}
