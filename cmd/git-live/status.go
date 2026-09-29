@@ -22,6 +22,7 @@ type Status struct {
 	Branch  string // branch line without the leading "## "
 	Entries []Entry
 	Err     error
+	Dir     string // the directory git status ran in
 	Root    string // top-level directory of the worktree, if known
 }
 
@@ -61,7 +62,7 @@ func runStatus(dir string, untracked bool) Status {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	var st Status
+	st := Status{Dir: dir}
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {

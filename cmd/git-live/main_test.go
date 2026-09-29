@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -231,32 +232,42 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 // unbuffered channels only complete once the loop has finished drawing the
 // previous event, so the test can inspect the output without races after stop.
 type loopHarness struct {
-	results chan Status
-	keys    chan key
-	quit    chan os.Signal
-	tick    chan time.Time
-	kick    chan struct{}
-	width   int
-	out     countingWriter
-	app     *app
-	err     chan error
+	results       chan Status
+	worktrees     chan Worktrees
+	keys          chan key
+	quit          chan os.Signal
+	tick          chan time.Time
+	kick          chan struct{}
+	kickWorktrees chan struct{}
+	width         int
+	out           countingWriter
+	app           *app
+	err           chan error
+	watched       []string // directories the loop switched to
+	polling       []bool   // calls to start (true) or stop (false) the worktree poll
 }
 
 func startLoop(t *testing.T) *loopHarness {
 	t.Helper()
 	h := &loopHarness{
-		results: make(chan Status),
-		keys:    make(chan key),
-		quit:    make(chan os.Signal),
-		tick:    make(chan time.Time),
-		kick:    make(chan struct{}, 1),
-		width:   60,
-		app:     &app{interval: time.Second},
-		err:     make(chan error, 1),
+		results:       make(chan Status),
+		worktrees:     make(chan Worktrees),
+		keys:          make(chan key),
+		quit:          make(chan os.Signal),
+		tick:          make(chan time.Time),
+		kick:          make(chan struct{}, 1),
+		kickWorktrees: make(chan struct{}, 1),
+		width:         60,
+		app:           &app{interval: time.Second},
+		err:           make(chan error, 1),
 	}
 	ev := events{
-		results: h.results, keys: h.keys, quit: h.quit, tick: h.tick, kick: h.kick,
+		results: h.results, worktrees: h.worktrees, keys: h.keys, quit: h.quit, tick: h.tick,
+		kick: h.kick, kickWorktrees: h.kickWorktrees,
 		size: func() (int, int, error) { return h.width, 8, nil },
+		// Called by the loop goroutine; the test reads them after stop.
+		watch:         func(dir string) { h.watched = append(h.watched, dir) },
+		pollWorktrees: func(on bool) { h.polling = append(h.polling, on) },
 	}
 	go func() { h.err <- h.app.loop(ev, &h.out) }()
 	return h
@@ -316,6 +327,46 @@ func TestLoopKeys(t *testing.T) {
 	case <-h.kick:
 	default:
 		t.Error("r did not request a refresh")
+	}
+}
+
+func TestLoopWorktrees(t *testing.T) {
+	h := startLoop(t)
+	h.results <- Status{Branch: "main", Root: "/src/repo"}
+	h.worktrees <- worktreeFixture() // the list isn't shown: ignored
+	h.keys <- char('w')
+	h.worktrees <- worktreeFixture()
+	h.keys <- char('r') // refreshes both the status and the worktree list
+	h.keys <- char('j')
+	h.keys <- press(keyEnter)                                               // switch to repo-agent
+	h.results <- Status{Branch: "main", Root: "/src/repo"}                  // stale: from before the switch
+	h.results <- Status{Dir: "/src/repo-agent", Branch: "claude/fix-login"} // the new worktree
+	h.stop(t)
+
+	if !reflect.DeepEqual(h.polling, []bool{true, false}) {
+		t.Errorf("worktree poll calls = %v, want start, then stop", h.polling)
+	}
+	if !reflect.DeepEqual(h.watched, []string{"/src/repo-agent"}) {
+		t.Errorf("watched = %v", h.watched)
+	}
+	if len(h.kick) != 1 || len(h.kickWorktrees) != 1 {
+		t.Errorf("r kicked status %d and worktrees %d times, want 1 each", len(h.kick), len(h.kickWorktrees))
+	}
+	frames := h.out.frames
+	var sawList bool
+	for _, f := range frames {
+		sawList = sawList || strings.Contains(stripANSI(f), "5 worktrees")
+	}
+	if !sawList {
+		t.Error("the worktree list was never drawn")
+	}
+	if last := stripANSI(frames[len(frames)-1]); !strings.Contains(last, "claude/fix-login") {
+		t.Errorf("last frame doesn't show the new worktree:\n%s", last)
+	}
+	for _, f := range frames[len(frames)-2:] {
+		if strings.Contains(stripANSI(f), "│  main") {
+			t.Errorf("a stale status from the old worktree was drawn:\n%s", stripANSI(f))
+		}
 	}
 }
 
@@ -598,6 +649,56 @@ func TestRunApp(t *testing.T) {
 
 	io.WriteString(keys, "t")
 	scr.waitFor(t, "TREE", "changed.txt (M+)")
+
+	io.WriteString(keys, "q")
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("runApp returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("q did not quit")
+	}
+}
+
+// TestRunAppWorktrees browses, selects and watches a real linked worktree.
+func TestRunAppWorktrees(t *testing.T) {
+	dir, git, write := testRepo(t)
+	feat := filepath.Join(t.TempDir(), "feat-wt")
+	git("worktree", "add", "-q", "-b", "feat", feat)
+	write("main-only.txt", "") // an untracked file in the main worktree
+	if err := os.WriteFile(filepath.Join(feat, "feat-only.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	in, keys := io.Pipe()
+	defer keys.Close()
+	scr := &screen{added: make(chan struct{}, 1)}
+	size := func() (int, int, error) { return 120, 12, nil }
+	cfg := config{dir: dir, interval: 20 * time.Millisecond}
+	errc := make(chan error, 1)
+	go func() { errc <- runApp(cfg, in, scr, size, nil, nil) }()
+
+	mainName := Worktree{Path: gitRoot(dir)}.Name()
+	scr.waitFor(t, "LIST", mainName, "main-only.txt")
+
+	io.WriteString(keys, "w")
+	scr.waitFor(t, "WORKTREES", "2 worktrees", "* "+mainName, "feat-wt", "feat", "1 untracked")
+
+	// A change in the other worktree shows up in the list while it is open.
+	if err := os.WriteFile(filepath.Join(feat, "second.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scr.waitFor(t, "WORKTREES", "2 untracked")
+
+	io.WriteString(keys, "j\r") // select feat-wt and switch to it
+	scr.waitFor(t, "LIST", "feat-wt", "feat", "feat-only.txt", "second.txt")
+
+	// Back in the list, the watched worktree is now feat-wt.
+	io.WriteString(keys, "w")
+	scr.waitFor(t, "WORKTREES", "* feat-wt")
+	io.WriteString(keys, "\x1b")
+	scr.waitFor(t, "LIST", "feat-wt")
 
 	io.WriteString(keys, "q")
 	select {

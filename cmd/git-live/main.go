@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -55,9 +56,11 @@ func (k key) is(r rune) bool { return k.code == keyChar && k.r == r }
 
 type app struct {
 	interval time.Duration
-	status   *Status // nil until the first run finishes
+	dir      string  // the directory being watched
+	status   *Status // nil until the first run in dir finishes
 	view     view
 	scroll   int
+	picker   *picker // the worktree list, while it is shown
 	width    int
 	height   int
 }
@@ -72,7 +75,8 @@ type config struct {
 
 const usage = `Usage: git live [-i interval] [-u] [--view list|tree] [path]
 
-Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refresh.
+Live git status. Keys: q quit, t/Tab toggle list/tree, w worktrees, ↑↓/jk scroll,
+r refresh.
 
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
   -u, --untracked    show untracked files in new directories
@@ -186,18 +190,28 @@ func runTerminal(cfg config) error {
 // runApp connects git polling and key input to the main loop and runs it
 // until the user quits. It reads keys from in and draws to out.
 func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, error), quit <-chan os.Signal, tick <-chan time.Time) error {
+	// The directory to watch changes when the user picks another worktree.
+	var mu sync.Mutex
+	dir := cfg.dir
+	watched := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return dir
+	}
+
 	done := make(chan struct{})
 	defer close(done)
 	results := make(chan Status)
 	kick := make(chan struct{}, 1)
-	var root string // cfg.dir's worktree, looked up once it is a repository
+	roots := map[string]string{} // worktree of each watched directory
 	status := func() Status {
-		st := runStatus(cfg.dir, cfg.untracked)
+		d := watched()
+		st := runStatus(d, cfg.untracked)
 		if st.Err == nil {
-			if root == "" {
-				root = gitRoot(cfg.dir)
+			if roots[d] == "" {
+				roots[d] = gitRoot(d)
 			}
-			st.Root = root
+			st.Root = roots[d]
 		}
 		return st
 	}
@@ -205,25 +219,58 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 	keys := make(chan key)
 	go readKeys(in, keys)
 
-	a := &app{interval: cfg.interval, view: cfg.view}
+	// The worktree list is only polled while it is shown.
+	worktrees := make(chan Worktrees)
+	kickWorktrees := make(chan struct{}, 1)
+	var stopWorktrees chan struct{}
+	pollWorktrees := func(on bool) {
+		if stopWorktrees != nil {
+			close(stopWorktrees)
+			stopWorktrees = nil
+		}
+		if on {
+			stopWorktrees = make(chan struct{})
+			load := func() Worktrees { return loadWorktrees(watched(), cfg.untracked) }
+			go poll(load, cfg.interval, worktrees, kickWorktrees, stopWorktrees)
+		}
+	}
+	defer pollWorktrees(false)
+
+	a := &app{interval: cfg.interval, view: cfg.view, dir: cfg.dir}
 	return a.loop(events{
-		results: results,
-		keys:    keys,
-		quit:    quit,
-		tick:    tick,
-		size:    size,
-		kick:    kick,
+		results:       results,
+		worktrees:     worktrees,
+		keys:          keys,
+		quit:          quit,
+		tick:          tick,
+		size:          size,
+		kick:          kick,
+		kickWorktrees: kickWorktrees,
+		watch: func(d string) {
+			mu.Lock()
+			dir = d
+			mu.Unlock()
+			select {
+			case kick <- struct{}{}:
+			default:
+			}
+		},
+		pollWorktrees: pollWorktrees,
 	}, out)
 }
 
-// events are the inputs of the main loop.
+// events are the inputs of the main loop, and what it controls.
 type events struct {
-	results <-chan Status
-	keys    <-chan key
-	quit    <-chan os.Signal
-	tick    <-chan time.Time // when to check the terminal size
-	size    func() (width, height int, err error)
-	kick    chan<- struct{} // asks poll for a refresh now
+	results       <-chan Status
+	worktrees     <-chan Worktrees // while the worktree list is shown
+	keys          <-chan key
+	quit          <-chan os.Signal
+	tick          <-chan time.Time // when to check the terminal size
+	size          func() (width, height int, err error)
+	kick          chan<- struct{}  // asks for a git status now
+	kickWorktrees chan<- struct{}  // asks for the worktree list now
+	watch         func(dir string) // watches another directory from now on
+	pollWorktrees func(on bool)    // starts or stops polling the worktree list
 }
 
 // loop handles events until the user quits, writing a frame to out only
@@ -236,17 +283,34 @@ func (a *app) loop(ev events, out io.Writer) error {
 	for {
 		select {
 		case st := <-ev.results:
+			if st.Dir != a.dir {
+				continue // started before switching to another worktree
+			}
 			a.status = &st
+		case wts := <-ev.worktrees:
+			if a.picker == nil {
+				continue // started before the list was closed
+			}
+			a.picker.wts = &wts
 		case k := <-ev.keys:
+			dir, picking := a.dir, a.picker != nil
 			quit, refresh := a.handleKey(k)
 			if quit {
 				return nil
 			}
 			if refresh {
-				select {
-				case ev.kick <- struct{}{}:
-				default: // a refresh is already pending
+				for _, c := range []chan<- struct{}{ev.kick, ev.kickWorktrees} {
+					select {
+					case c <- struct{}{}:
+					default: // a refresh is already pending
+					}
 				}
+			}
+			if a.dir != dir {
+				ev.watch(a.dir)
+			}
+			if picking != (a.picker != nil) {
+				ev.pollWorktrees(!picking)
 			}
 		case <-ev.tick:
 			if w, h, err := ev.size(); err == nil {
@@ -264,12 +328,12 @@ func (a *app) loop(ev events, out io.Writer) error {
 	}
 }
 
-// poll calls status repeatedly, never overlapping calls, waiting interval
+// poll calls fetch repeatedly, never overlapping calls, waiting interval
 // between them. A send on kick skips the wait; closing done stops it.
-func poll(status func() Status, interval time.Duration, results chan<- Status, kick <-chan struct{}, done <-chan struct{}) {
+func poll[T any](fetch func() T, interval time.Duration, results chan<- T, kick <-chan struct{}, done <-chan struct{}) {
 	for {
 		select {
-		case results <- status():
+		case results <- fetch():
 		case <-done:
 			return
 		}
@@ -358,11 +422,16 @@ func (a *app) bodyHeight() int { return max(a.height-2, 1) }
 // handleKey applies a key press to the app. It reports whether the key asks
 // to quit or to refresh now.
 func (a *app) handleKey(k key) (quit, refresh bool) {
+	if a.picker != nil {
+		return a.handlePickerKey(k)
+	}
 	switch {
 	case k.code == keyQuit, k.is('q'), k.is('Q'):
 		return true, false
 	case k.is('r'), k.is('R'):
 		return false, true
+	case k.is('w'), k.is('W'):
+		a.openPicker()
 	case k.code == keyTab, k.is('t'), k.is('T'):
 		a.view = 1 - a.view
 		a.scroll = 0
@@ -397,22 +466,30 @@ func (a *app) frame() []string {
 		return nil
 	}
 	bodyH := a.bodyHeight()
-	body := a.body()
-	a.scroll = min(max(a.scroll, 0), max(len(body)-bodyH, 0))
+	body, sel := a.body()
+	scroll := &a.scroll
+	footer := " q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh"
+	if a.picker != nil {
+		scroll = &a.picker.scroll
+		if sel >= 0 { // keep the selection on the screen
+			*scroll = max(min(*scroll, sel), sel-bodyH+1)
+		}
+		footer = " enter switch  ↑↓/jk select  w/esc back  r refresh  q quit"
+	}
+	*scroll = min(max(*scroll, 0), max(len(body)-bodyH, 0))
 
 	rows := make([]string, 0, a.height)
 	rows = append(rows, ansiReverse+pad(truncate(a.header(), a.width), a.width)+ansiReset)
 	for i := range bodyH {
 		line := ""
-		if n := a.scroll + i; n < len(body) {
+		if n := *scroll + i; n < len(body) {
 			line = body[n]
 		}
 		rows = append(rows, truncate(line, a.width))
 	}
 	if a.height > 1 {
-		footer := " q quit  t/Tab toggle view  ↑↓/jk scroll  r refresh"
 		if len(body) > bodyH {
-			pos := fmt.Sprintf("%d-%d/%d ", a.scroll+1, min(a.scroll+bodyH, len(body)), len(body))
+			pos := fmt.Sprintf("%d-%d/%d ", *scroll+1, min(*scroll+bodyH, len(body)), len(body))
 			// Shorten the key hints, not the position, on narrow terminals.
 			w := max(a.width-len(pos), 0)
 			if r := []rune(footer); len(r) >= w {
@@ -426,6 +503,9 @@ func (a *app) frame() []string {
 }
 
 func (a *app) header() string {
+	if a.picker != nil {
+		return a.pickerHeader()
+	}
 	name := "LIST"
 	if a.view == treeView {
 		name = "TREE"
@@ -472,21 +552,34 @@ func counts(entries []Entry) string {
 	return strings.Join(parts, ", ")
 }
 
-func (a *app) body() []string {
+// body returns the lines below the header, and which of them is selected
+// (-1 for none).
+func (a *app) body() ([]string, int) {
 	switch {
+	case a.picker != nil:
+		return a.pickerBody()
 	case a.status == nil:
-		msg := "Running git status…"
-		lines := make([]string, a.bodyHeight()/2)
-		return append(lines, strings.Repeat(" ", max((a.width-visibleLen(msg))/2, 0))+msg)
+		return a.centered("Running git status…"), -1
 	case a.status.Err != nil:
-		var lines []string
-		for _, l := range strings.Split(a.status.Err.Error(), "\n") {
-			lines = append(lines, red(l))
-		}
-		return append(lines, "", dim(fmt.Sprintf("Retrying every %s…", a.interval)))
+		return a.errorLines(a.status.Err), -1
 	case a.view == treeView:
-		return renderTree(a.status.Entries)
+		return renderTree(a.status.Entries), -1
 	default:
-		return renderList(a.status.Entries)
+		return renderList(a.status.Entries), -1
 	}
+}
+
+// centered returns lines that show msg in the middle of the body.
+func (a *app) centered(msg string) []string {
+	lines := make([]string, a.bodyHeight()/2)
+	return append(lines, strings.Repeat(" ", max((a.width-visibleLen(msg))/2, 0))+msg)
+}
+
+// errorLines shows a git error, which is retried every interval.
+func (a *app) errorLines(err error) []string {
+	var lines []string
+	for _, l := range strings.Split(err.Error(), "\n") {
+		lines = append(lines, red(l))
+	}
+	return append(lines, "", dim(fmt.Sprintf("Retrying every %s…", a.interval)))
 }
