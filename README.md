@@ -30,7 +30,7 @@ ___
 
 ## Installation
 
-Install with Go 1.26 or newer:
+Install with [Go](https://go.dev/dl) 1.26 or newer:
 
 ```
 go install github.com/wteuber/git-status-live/cmd/git-live@latest && git config --global alias.live '!exec ~/go/bin/git-live'
