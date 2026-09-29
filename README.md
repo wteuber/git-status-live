@@ -13,6 +13,10 @@ Switch between a `git status`-style **list** and a
 a single key. Files that are untracked (?), added (A), modified (M), deleted (D)
 or renamed (R) are colored by whether they are staged (green)(+) or not (red).
 
+Working with several [worktrees](https://git-scm.com/docs/git-worktree), e.g.
+one per coding agent? Press `w` to see all of them with their changes at a
+glance, search them, and switch the live view to any one of them.
+
 See [CHANGELOG.md](CHANGELOG.md) for a list of changes between versions.
 ___
 ## Features
@@ -22,6 +26,9 @@ ___
 - **Two views:** a grouped list exactly like `git status`, and a colored file
   tree like `git tree`. Toggle with `t` or `Tab`, and choose the one to start
   in with `--view` or `git config live.view`.
+- **Worktrees:** browse and search all worktrees of the repository, see which
+  ones have changes, and switch the live view to any of them without leaving
+  git live.
 - **Safe to leave running:** runs git with `GIT_OPTIONAL_LOCKS=0`, so it never
   takes `index.lock` and never gets in the way of your own `git` commands.
 - **Kind to big repos:** runs never overlap; on a slow repo it simply checks
@@ -64,6 +71,7 @@ git live
 | ----------------------- | ----------------------------- |
 | `q`, `Ctrl-C`           | Quit                          |
 | `t`, `Tab`              | Toggle between list and tree  |
+| `w`                     | Show the [worktrees](#worktrees) |
 | `↑` `↓`, `k` `j`        | Scroll one line               |
 | `PgUp` `PgDn`, `Space`  | Scroll one page               |
 | `g` `G`, `Home` `End`   | Jump to top / bottom          |
@@ -71,8 +79,98 @@ git live
 
 The header shows the current view, the name of the worktree (its directory),
 the branch with its upstream and ahead/behind counts, and how many files are
-staged, unstaged, untracked or in conflict. When the list is longer than the screen, the footer shows which lines
-are visible.
+staged, unstaged, untracked or in conflict. When the list is longer than the
+screen, the footer shows which lines are visible.
+
+## Worktrees
+
+If you work in several [worktrees](https://git-scm.com/docs/git-worktree) of
+the same repository, for example one per coding agent, press `w` to list all of
+them:
+
+```
+ WORKTREES  │  4 worktrees
+* shop          main                 1 unstaged             ~/src/shop
+  shop-agent-1  claude/fix-checkout  2 unstaged             ~/src/shop-agent-1
+  shop-agent-2  claude/add-tests     1 staged, 2 untracked  ~/src/shop-agent-2
+  shop-review   (detached 4945c5b)   clean                  ~/src/shop-review
+
+ enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit
+```
+
+Each row shows the worktree's directory name, its branch (or the commit, if
+its HEAD is detached), a summary of its changes, and its path. The worktree
+git live is watching is marked with `*` and selected when the list opens. The
+summary is green if all changes are staged, red if anything is unstaged,
+untracked or in conflict, and dimmed if the worktree is clean. The list
+refreshes every interval while it is open, so you can watch several agents at
+work at once.
+
+Select a worktree and press `Enter` to switch the live view to it. The header
+then shows its name:
+
+```
+ LIST  │  shop-agent-2  │  claude/add-tests  │  1 staged, 2 untracked
+Changes to be committed:
+        new file:   test/cart_test.rb
+
+Untracked files:
+        notes.md
+        test/checkout_test.rb
+```
+
+#### Search
+
+Press `/` and type to show only the worktrees whose name, branch or path
+contain what you type. Separate words with spaces to narrow it down further:
+every word has to match, in any order and ignoring case (`agent tests` finds
+`shop-agent-2` on `claude/add-tests`).
+
+```
+ WORKTREES  │  2 of 4 worktrees  │  /agent▏
+  shop-agent-1  claude/fix-checkout  2 unstaged             ~/src/shop-agent-1
+  shop-agent-2  claude/add-tests     1 staged, 2 untracked  ~/src/shop-agent-2
+```
+
+While you search, the keys type text, except for the ones below.
+
+#### Keys in the worktree list
+
+| Key                     | Action                                          |
+| ----------------------- | ----------------------------------------------- |
+| `Enter`                 | Watch the selected worktree                     |
+| `↑` `↓`, `k` `j`        | Select the previous / next worktree             |
+| `PgUp` `PgDn`, `Space`  | Move the selection by one page                  |
+| `g` `G`, `Home` `End`   | Select the first / last worktree                |
+| `/`                     | Search                                          |
+| `w`, `Esc`              | Back to the list or tree, without switching     |
+| `r`                     | Refresh now                                     |
+| `q`, `Ctrl-C`           | Quit                                            |
+
+While searching:
+
+| Key                     | Action                                          |
+| ----------------------- | ----------------------------------------------- |
+| Any character           | Add it to the search                            |
+| `Backspace`             | Delete the last character; on an empty search, stop searching |
+| `↑` `↓`, `PgUp` `PgDn`, `Home` `End` | Move the selection among the matches |
+| `Enter`                 | Watch the selected worktree                     |
+| `Esc`                   | Clear the search and show all worktrees again   |
+| `Ctrl-C`                | Quit                                            |
+
+#### Special worktrees
+
+- **Locked** worktrees (`git worktree lock`) show `locked` after their summary.
+  You can still watch them.
+- **Prunable** worktrees, whose directory was deleted without
+  `git worktree remove`, show `missing, prunable` and can't be selected. Run
+  `git worktree prune` to remove them from the list.
+- A **bare** repository shows `(bare)` and `no working tree`, and can't be
+  selected either, since there are no files to show.
+
+git live keeps the view (list or tree) when you switch worktrees. Starting git
+live inside any worktree watches that worktree, as always; the path argument
+works the same way, e.g. `git live ~/src/shop-agent-1`.
 
 ## Options
 
@@ -179,7 +277,7 @@ git clean -xdf
 
 git-status-live supports:
 * Git (https://git-scm.com): version 2.11+ (2.15+ to poll without taking
-  `index.lock`)
+  `index.lock`, 2.31+ to mark locked and prunable worktrees)
 * macOS, Linux and other Unix systems, and Windows 10+ (Windows Terminal or
   any console with virtual terminal support)
 
@@ -225,8 +323,9 @@ below 89%.
 Everything is tested except the terminal setup itself (raw mode, the alternate
 screen, and the Windows console mode), which needs a real terminal. The code
 behind it is split so that it can be tested without one: the main loop takes
-its keys, git results and output as parameters, and one test drives the whole
-app, from `git status` polling to key presses, against a real repository.
+its keys, git results and output as parameters, and end-to-end tests drive the
+whole app, from `git status` polling to key presses, searching and switching
+worktrees, against real repositories.
 
 ## License
 
