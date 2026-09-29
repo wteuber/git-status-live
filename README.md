@@ -33,20 +33,17 @@ ___
 Install with Go 1.26 or newer:
 
 ```
-go install github.com/wteuber/git-status-live/cmd/git-live@latest
+go install github.com/wteuber/git-status-live/cmd/git-live@latest && git config --global alias.live '!exec ~/go/bin/git-live'
 ```
 
-This puts a `git-live` binary into `$(go env GOPATH)/bin` (usually `~/go/bin`).
-Register it as a git alias so `git live` works in every repository, without
-changing your `PATH`:
+This builds a `git-live` binary into `~/go/bin` and registers it as the git
+alias `live`, so `git live` works in every repository without changing your
+`PATH`. Run the same command again to update.
 
-```
-git config --global alias.live '!exec ~/go/bin/git-live'
-```
-
-Adjust the path if `go env GOPATH` is not `~/go`. If that `bin` directory is
-already on your `PATH`, you can skip the alias: git runs any `git-<name>`
-executable on the `PATH` as `git <name>`.
+If you set `GOPATH` or `GOBIN`, use the directory that `go install` wrote to in
+the alias instead of `~/go/bin`. If that directory is already on your `PATH`,
+you can skip the alias: git runs any `git-<name>` executable on the `PATH` as
+`git <name>`.
 
 ## Usage
 
@@ -177,10 +174,18 @@ Building from source requires Go 1.26+ (https://go.dev), the minimum version of
 
 ## Uninstall
 
+Remove the alias and the binary:
+
 ```
-git config --global --unset alias.live
-rm "$(go env GOPATH)/bin/git-live"
+git config --global --unset alias.live; rm -f ~/go/bin/git-live
 ```
+
+It is safe to run more than once. If you installed into a different directory
+(see [Installation](#installation)), remove `git-live` from there instead. On
+Windows, the binary is `git-live.exe`.
+
+Go also keeps the downloaded source in its module cache. It is harmless, and
+`go clean -modcache` removes it together with every other cached module.
 ___
 ## Development
 
