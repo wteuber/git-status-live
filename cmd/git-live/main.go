@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -23,19 +24,34 @@ const (
 	treeView
 )
 
-type key int
+// keyCode is a key on the keyboard. What it does depends on the app's state.
+type keyCode int
 
 const (
-	keyQuit key = iota
-	keyToggle
-	keyRefresh
+	keyChar keyCode = iota // a printable character, in key.r
+	keyQuit                // Ctrl-C, or the end of the input
+	keyEnter
+	keyEsc
+	keyBackspace
+	keyTab
 	keyUp
 	keyDown
 	keyPageUp
 	keyPageDown
-	keyTop
-	keyBottom
+	keyHome
+	keyEnd
 )
+
+// key is one key press.
+type key struct {
+	code keyCode
+	r    rune // the character, for keyChar
+}
+
+func char(r rune) key { return key{code: keyChar, r: r} }
+
+// is reports whether k is the character r.
+func (k key) is(r rune) bool { return k.code == keyChar && k.r == r }
 
 type app struct {
 	interval time.Duration
@@ -212,16 +228,16 @@ func (a *app) loop(ev events, out io.Writer) error {
 		case st := <-ev.results:
 			a.status = &st
 		case k := <-ev.keys:
-			if k == keyQuit {
+			quit, refresh := a.handleKey(k)
+			if quit {
 				return nil
 			}
-			if k == keyRefresh {
+			if refresh {
 				select {
 				case ev.kick <- struct{}{}:
 				default: // a refresh is already pending
 				}
 			}
-			a.handleKey(k)
 		case <-ev.tick:
 			if w, h, err := ev.size(); err == nil {
 				a.width, a.height = w, h
@@ -266,59 +282,62 @@ func readKeys(r io.Reader, keys chan<- key) {
 			keys <- k
 		}
 		if err != nil {
-			keys <- keyQuit
+			keys <- key{code: keyQuit}
 			return
 		}
 	}
 }
 
+// decodeKeys decodes one read of raw terminal input into key presses.
 func decodeKeys(b []byte) []key {
 	var keys []key
 	for i := 0; i < len(b); i++ {
-		switch b[i] {
-		case 'q', 'Q', 3: // 3 is Ctrl-C
-			keys = append(keys, keyQuit)
-		case 't', 'T', '\t':
-			keys = append(keys, keyToggle)
-		case 'r', 'R':
-			keys = append(keys, keyRefresh)
-		case 'k':
-			keys = append(keys, keyUp)
-		case 'j':
-			keys = append(keys, keyDown)
-		case ' ':
-			keys = append(keys, keyPageDown)
-		case 'g':
-			keys = append(keys, keyTop)
-		case 'G':
-			keys = append(keys, keyBottom)
-		case 0x1b:
-			if i+2 >= len(b) || (b[i+1] != '[' && b[i+1] != 'O') {
-				continue // lone Escape, ignore
+		switch c := b[i]; {
+		case c == 3: // Ctrl-C
+			keys = append(keys, key{code: keyQuit})
+		case c == '\r' || c == '\n':
+			keys = append(keys, key{code: keyEnter})
+		case c == '\t':
+			keys = append(keys, key{code: keyTab})
+		case c == 0x7f || c == 0x08:
+			keys = append(keys, key{code: keyBackspace})
+		case c == 0x1b:
+			// Escape on its own, or followed by something other than a
+			// cursor key sequence (e.g. Alt-x), is the Escape key.
+			if i+1 == len(b) || (b[i+1] != '[' && b[i+1] != 'O') {
+				keys = append(keys, key{code: keyEsc})
+				continue
 			}
 			j := i + 2
 			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
 				j++
 			}
-			if j >= len(b) {
+			if j >= len(b) { // incomplete sequence at the end of the read
 				i = j
 				continue
 			}
 			switch seq := string(b[i+2 : j+1]); seq {
 			case "A":
-				keys = append(keys, keyUp)
+				keys = append(keys, key{code: keyUp})
 			case "B":
-				keys = append(keys, keyDown)
+				keys = append(keys, key{code: keyDown})
 			case "5~":
-				keys = append(keys, keyPageUp)
+				keys = append(keys, key{code: keyPageUp})
 			case "6~":
-				keys = append(keys, keyPageDown)
+				keys = append(keys, key{code: keyPageDown})
 			case "H", "1~", "7~":
-				keys = append(keys, keyTop)
+				keys = append(keys, key{code: keyHome})
 			case "F", "4~", "8~":
-				keys = append(keys, keyBottom)
+				keys = append(keys, key{code: keyEnd})
 			}
 			i = j
+		case c < 0x20: // other control characters
+		default:
+			r, n := utf8.DecodeRune(b[i:])
+			if r != utf8.RuneError {
+				keys = append(keys, char(r))
+			}
+			i += n - 1
 		}
 	}
 	return keys
@@ -326,24 +345,31 @@ func decodeKeys(b []byte) []key {
 
 func (a *app) bodyHeight() int { return max(a.height-2, 1) }
 
-func (a *app) handleKey(k key) {
-	switch k {
-	case keyToggle:
+// handleKey applies a key press to the app. It reports whether the key asks
+// to quit or to refresh now.
+func (a *app) handleKey(k key) (quit, refresh bool) {
+	switch {
+	case k.code == keyQuit, k.is('q'), k.is('Q'):
+		return true, false
+	case k.is('r'), k.is('R'):
+		return false, true
+	case k.code == keyTab, k.is('t'), k.is('T'):
 		a.view = 1 - a.view
 		a.scroll = 0
-	case keyUp:
+	case k.code == keyUp, k.is('k'):
 		a.scroll--
-	case keyDown:
+	case k.code == keyDown, k.is('j'):
 		a.scroll++
-	case keyPageUp:
+	case k.code == keyPageUp:
 		a.scroll -= a.bodyHeight()
-	case keyPageDown:
+	case k.code == keyPageDown, k.is(' '):
 		a.scroll += a.bodyHeight()
-	case keyTop:
+	case k.code == keyHome, k.is('g'):
 		a.scroll = 0
-	case keyBottom:
+	case k.code == keyEnd, k.is('G'):
 		a.scroll = 1 << 30 // clamped when drawing
 	}
+	return false, false
 }
 
 // draw returns the escape sequence that paints the whole screen.

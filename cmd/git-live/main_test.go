@@ -13,11 +13,41 @@ import (
 	"time"
 )
 
+// press returns the key press for a key that isn't a character.
+func press(c keyCode) key { return key{code: c} }
+
 func TestDecodeKeys(t *testing.T) {
-	got := decodeKeys([]byte("t\tjk\x1b[A\x1b[B\x1b[5~\x1b[6~gG\x1bq"))
-	want := []key{keyToggle, keyToggle, keyDown, keyUp, keyUp, keyDown, keyPageUp, keyPageDown, keyTop, keyBottom, keyQuit}
+	got := decodeKeys([]byte("t\tjk\x1b[A\x1b[B\x1b[5~\x1b[6~\r\x7fé\x03"))
+	want := []key{char('t'), press(keyTab), char('j'), char('k'), press(keyUp), press(keyDown),
+		press(keyPageUp), press(keyPageDown), press(keyEnter), press(keyBackspace), char('é'), press(keyQuit)}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decodeKeys = %v, want %v", got, want)
+	}
+}
+
+func TestHandleKeyActions(t *testing.T) {
+	for _, tc := range []struct {
+		key           key
+		quit, refresh bool
+		view          view
+	}{
+		{char('q'), true, false, listView},
+		{char('Q'), true, false, listView},
+		{press(keyQuit), true, false, listView},
+		{char('r'), false, true, listView},
+		{char('R'), false, true, listView},
+		{char('t'), false, false, treeView},
+		{char('T'), false, false, treeView},
+		{press(keyTab), false, false, treeView},
+		{char('x'), false, false, listView},
+		{press(keyEnter), false, false, listView},
+	} {
+		a := &app{width: 40, height: 10}
+		quit, refresh := a.handleKey(tc.key)
+		if quit != tc.quit || refresh != tc.refresh || a.view != tc.view {
+			t.Errorf("key %+v: quit=%v refresh=%v view=%v, want %v %v %v",
+				tc.key, quit, refresh, a.view, tc.quit, tc.refresh, tc.view)
+		}
 	}
 }
 
@@ -78,8 +108,8 @@ func TestFrame(t *testing.T) {
 		t.Error("unchanged status produced a different frame")
 	}
 
-	a.handleKey(keyToggle)
-	a.handleKey(keyBottom)
+	a.handleKey(char('t'))
+	a.handleKey(char('G'))
 	rows = a.frame()
 	if !strings.Contains(stripANSI(rows[0]), "TREE") || !strings.Contains(stripANSI(rows[3]), "both.go (M+M)") {
 		t.Errorf("tree view bottom:\n%s", plain(rows))
@@ -223,7 +253,7 @@ func startLoop(t *testing.T) *loopHarness {
 // stop quits the loop with q and waits for it to return.
 func (h *loopHarness) stop(t *testing.T) {
 	t.Helper()
-	h.keys <- keyQuit
+	h.keys <- char('q')
 	if err := <-h.err; err != nil {
 		t.Fatalf("loop returned %v", err)
 	}
@@ -262,9 +292,9 @@ func TestLoopResize(t *testing.T) {
 func TestLoopKeys(t *testing.T) {
 	h := startLoop(t)
 	h.results <- Status{Branch: "main", Entries: sample}
-	h.keys <- keyToggle
-	h.keys <- keyRefresh
-	h.keys <- keyRefresh // a refresh is already pending: must not block
+	h.keys <- char('t')
+	h.keys <- char('r')
+	h.keys <- char('R') // a refresh is already pending: must not block
 	h.stop(t)
 
 	if h.app.view != treeView || !strings.Contains(stripANSI(h.out.frames[len(h.out.frames)-1]), "TREE") {
@@ -365,7 +395,7 @@ func TestReadKeys(t *testing.T) {
 		got = append(got, k)
 	}
 	// End of input quits, so a closed terminal can't leave git-live hanging.
-	want := []key{keyToggle, keyDown, keyQuit}
+	want := []key{char('t'), char('j'), press(keyQuit)}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("keys = %v, want %v", got, want)
 	}
@@ -376,13 +406,19 @@ func TestDecodeKeysMore(t *testing.T) {
 		in   string
 		want []key
 	}{
-		{"\x1bOA\x1bOB", []key{keyUp, keyDown}}, // application cursor mode
-		{"\x1b[H\x1b[F\x1b[1~\x1b[4~", []key{keyTop, keyBottom, keyTop, keyBottom}},
-		{"rR Q\x03", []key{keyRefresh, keyRefresh, keyPageDown, keyQuit, keyQuit}},
-		{"\x1b[", nil},                // incomplete sequence at the end of a read
-		{"\x1b[12", nil},              // digits without a final byte
-		{"\x1b[Zt", []key{keyToggle}}, // unknown sequence (Shift-Tab) is skipped
-		{"x\x1b", nil},                // unmapped key and lone Escape
+		{"\x1bOA\x1bOB", []key{press(keyUp), press(keyDown)}}, // application cursor mode
+		{"\x1b[H\x1b[F\x1b[1~\x1b[4~\x1b[7~\x1b[8~", []key{press(keyHome), press(keyEnd),
+			press(keyHome), press(keyEnd), press(keyHome), press(keyEnd)}},
+		{"\x1b[", nil},                             // incomplete sequence at the end of a read
+		{"\x1b[12", nil},                           // digits without a final byte
+		{"\x1b[Zt", []key{char('t')}},              // unknown sequence (Shift-Tab) is skipped
+		{"x\x1b", []key{char('x'), press(keyEsc)}}, // Escape on its own
+		{"\x1bx", []key{press(keyEsc), char('x')}}, // Alt-x: Escape, then x
+		{"\n\x08", []key{press(keyEnter), press(keyBackspace)}},
+		{"\x01\x1a", nil}, // other control characters are ignored
+		{"日本", []key{char('日'), char('本')}},
+		{"\xe6\x97", nil},           // a character cut off at the end of a read
+		{"\xffa", []key{char('a')}}, // invalid UTF-8 is skipped
 	} {
 		if got := decodeKeys([]byte(tc.in)); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("decodeKeys(%q) = %v, want %v", tc.in, got, tc.want)
@@ -403,21 +439,24 @@ func TestScroll(t *testing.T) {
 		key  key
 		want string
 	}{
-		{keyDown, "f00"},
-		{keyDown, "f01"},
-		{keyUp, "f00"},
-		{keyUp, "Untracked files:"},
-		{keyUp, "Untracked files:"}, // can't scroll above the top
-		{keyPageDown, "f04"},
-		{keyPageDown, "f09"},
-		{keyPageUp, "f04"},
-		{keyBottom, "f15"}, // last page shows f15..f19
-		{keyDown, "f15"},   // can't scroll past the end
-		{keyTop, "Untracked files:"},
+		{press(keyDown), "f00"},
+		{char('j'), "f01"},
+		{char('k'), "f00"},
+		{press(keyUp), "Untracked files:"},
+		{press(keyUp), "Untracked files:"}, // can't scroll above the top
+		{press(keyPageDown), "f04"},
+		{char(' '), "f09"},
+		{press(keyPageUp), "f04"},
+		{press(keyEnd), "f15"},  // last page shows f15..f19
+		{press(keyDown), "f15"}, // can't scroll past the end
+		{press(keyHome), "Untracked files:"},
+		{char('G'), "f15"},
+		{char('g'), "Untracked files:"},
+		{press(keyEsc), "Untracked files:"}, // does nothing outside the worktree list
 	} {
 		a.handleKey(step.key)
 		if got := firstRow(); got != step.want {
-			t.Fatalf("after key %d first row = %q, want %q", step.key, got, step.want)
+			t.Fatalf("after key %+v first row = %q, want %q", step.key, got, step.want)
 		}
 	}
 	if footer := stripANSI(a.frame()[6]); !strings.Contains(footer, "1-5/21") {
