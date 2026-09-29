@@ -82,7 +82,7 @@ git live [-i interval] [-u] [--view list|tree] [path]
 -i duration        Refresh interval, e.g. 250ms or 2s (default 500ms)
 -u, --untracked    Show untracked files in new directories
 --view list|tree   View to start in (default: git config live.view, or list)
--h                 Show help message
+-h, --help         Show help message and a link to this repository
 path               Repository to watch (default: current directory)
 ```
 
@@ -101,8 +101,9 @@ git live                    git live -u
 ```
 
 **Note:** Due to how git handles aliases, `git live --help` shows the alias
-expansion instead of the help message. Use `git live -h` to see the help
-message.
+expansion instead of the help message: git turns `--help` into `git help live`
+before it runs the alias. Use `git live -h`, or run the binary directly with
+`~/go/bin/git-live --help`, to see the help message.
 
 ## Configuration
 

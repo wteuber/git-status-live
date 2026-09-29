@@ -61,7 +61,9 @@ Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refre
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
   -u, --untracked    show untracked files in new directories
   --view list|tree   view to start in (default: git config live.view, or list)
-  -h                 show this help
+  -h, --help         show this help
+
+Source: https://github.com/wteuber/git-status-live
 `
 
 func main() {
@@ -69,8 +71,8 @@ func main() {
 }
 
 // cli parses args, calls start with the resulting config and returns the
-// process exit code: 0 on success or -h, 1 if start fails or the git config
-// is invalid, 2 for bad usage.
+// process exit code: 0 on success or -h/--help, 1 if start fails or the git
+// config is invalid, 2 for bad usage.
 func cli(args []string, stdout, stderr io.Writer, start func(config) error) int {
 	fs := flag.NewFlagSet("git live", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // errors and usage are printed below
