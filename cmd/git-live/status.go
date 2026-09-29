@@ -22,6 +22,7 @@ type Status struct {
 	Branch  string // branch line without the leading "## "
 	Entries []Entry
 	Err     error
+	Root    string // top-level directory of the worktree, if known
 }
 
 func (e Entry) Untracked() bool { return e.X == '?' && e.Y == '?' }

@@ -190,7 +190,17 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 	defer close(done)
 	results := make(chan Status)
 	kick := make(chan struct{}, 1)
-	status := func() Status { return runStatus(cfg.dir, cfg.untracked) }
+	var root string // cfg.dir's worktree, looked up once it is a repository
+	status := func() Status {
+		st := runStatus(cfg.dir, cfg.untracked)
+		if st.Err == nil {
+			if root == "" {
+				root = gitRoot(cfg.dir)
+			}
+			st.Root = root
+		}
+		return st
+	}
 	go poll(status, cfg.interval, results, kick, done)
 	keys := make(chan key)
 	go readKeys(in, keys)
@@ -422,6 +432,9 @@ func (a *app) header() string {
 	}
 	left := " " + name
 	if a.status != nil && a.status.Err == nil {
+		if a.status.Root != "" {
+			left += "  │  " + Worktree{Path: a.status.Root}.Name()
+		}
 		left += "  │  " + a.status.Branch
 		if s := counts(a.status.Entries); s != "" {
 			left += "  │  " + s

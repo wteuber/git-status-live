@@ -69,9 +69,9 @@ git live
 | `g` `G`, `Home` `End`   | Jump to top / bottom          |
 | `r`                     | Refresh now                   |
 
-The header shows the current view, the branch with its upstream and
-ahead/behind counts, and how many files are staged, unstaged, untracked or in
-conflict. When the list is longer than the screen, the footer shows which lines
+The header shows the current view, the name of the worktree (its directory),
+the branch with its upstream and ahead/behind counts, and how many files are
+staged, unstaged, untracked or in conflict. When the list is longer than the screen, the footer shows which lines
 are visible.
 
 ## Options
@@ -134,7 +134,7 @@ git live
 ```
 
 ```
- LIST  │  main...origin/main  │  3 staged, 2 unstaged, 1 untracked
+ LIST  │  git-status-live  │  main...origin/main  │  3 staged, 2 unstaged, 1 untracked
 Changes to be committed:
         deleted:    .gitignore
         new file:   NOTES.md
@@ -153,7 +153,7 @@ Untracked files:
 Press `t` to switch to the tree view:
 
 ```
- TREE  │  main...origin/main  │  3 staged, 2 unstaged, 1 untracked
+ TREE  │  git-status-live  │  main...origin/main  │  3 staged, 2 unstaged, 1 untracked
 .
 ├── cmd
 │   └── git-live

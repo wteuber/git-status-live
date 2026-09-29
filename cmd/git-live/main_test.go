@@ -116,6 +116,18 @@ func TestFrame(t *testing.T) {
 	}
 }
 
+func TestHeaderShowsWorktree(t *testing.T) {
+	a := &app{width: 80, height: 5, status: &Status{Branch: "feat", Root: "/src/repo-agent", Entries: sample[:1]}}
+	if got := strings.TrimSpace(stripANSI(a.frame()[0])); got != "LIST  │  repo-agent  │  feat  │  1 staged" {
+		t.Errorf("header = %q", got)
+	}
+	// On error, the header shows neither the worktree nor the branch.
+	a.status = &Status{Err: errors.New("fatal"), Root: "/src/repo-agent"}
+	if got := strings.TrimSpace(stripANSI(a.frame()[0])); got != "LIST" {
+		t.Errorf("error header = %q", got)
+	}
+}
+
 func TestCLI(t *testing.T) {
 	isolateGitConfig(t) // live.view in the user's config must not change the view
 	for _, tc := range []struct {
@@ -576,7 +588,7 @@ func TestRunApp(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() { errc <- runApp(cfg, in, scr, size, nil, nil) }()
 
-	scr.waitFor(t, "LIST", "main", "nothing to commit")
+	scr.waitFor(t, "LIST", Worktree{Path: gitRoot(dir)}.Name(), "main", "nothing to commit")
 
 	// Changes made while it runs show up without any key press.
 	write("changed.txt", "two\n")
