@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--view list|tree` option and `live.view` git config setting to choose the view `git live` starts in. `--view` takes precedence over `live.view`; without either, it starts in the list view as before.
+
 ## [0.1.0] - 2026-09-29
 
 First release.

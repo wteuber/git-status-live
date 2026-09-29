@@ -87,6 +87,7 @@ func TestFrame(t *testing.T) {
 }
 
 func TestCLI(t *testing.T) {
+	isolateGitConfig(t) // live.view in the user's config must not change the view
 	for _, tc := range []struct {
 		name     string
 		args     []string
@@ -102,6 +103,11 @@ func TestCLI(t *testing.T) {
 			cfg: &config{dir: "repo", interval: 250 * time.Millisecond, untracked: true}},
 		{name: "long untracked", args: []string{"--untracked"}, code: 0,
 			cfg: &config{dir: ".", interval: 500 * time.Millisecond, untracked: true}},
+		{name: "view", args: []string{"--view", "tree"}, code: 0,
+			cfg: &config{dir: ".", interval: 500 * time.Millisecond, view: treeView}},
+		{name: "view in any case", args: []string{"-view=TREE"}, code: 0,
+			cfg: &config{dir: ".", interval: 500 * time.Millisecond, view: treeView}},
+		{name: "unknown view", args: []string{"--view", "grid"}, code: 2, stderr: `unknown view "grid", want list or tree`},
 		{name: "help", args: []string{"-h"}, code: 0, stdout: "Usage: git live"},
 		{name: "unknown flag", args: []string{"-x"}, code: 2, stderr: "git live: flag provided but not defined: -x"},
 		{name: "bad interval", args: []string{"-i", "0s"}, code: 2, stderr: "interval must be positive"},
@@ -132,6 +138,38 @@ func TestCLI(t *testing.T) {
 				t.Errorf("usage error without usage text: %q", stderr.String())
 			}
 		})
+	}
+}
+
+func TestCLIViewFromGitConfig(t *testing.T) {
+	dir, git, _ := testRepo(t)
+	run := func(args ...string) (int, *config, string) {
+		var stderr strings.Builder
+		var got *config
+		code := cli(args, io.Discard, &stderr, func(c config) error { got = &c; return nil })
+		return code, got, stderr.String()
+	}
+
+	git("config", "live.view", "tree")
+	if code, cfg, _ := run(dir); code != 0 || cfg.view != treeView {
+		t.Errorf("live.view=tree: code %d, config %+v; want tree", code, cfg)
+	}
+	// --view wins over the git config.
+	if code, cfg, _ := run("--view", "list", dir); code != 0 || cfg.view != listView {
+		t.Errorf("--view list: code %d, config %+v; want list", code, cfg)
+	}
+
+	git("config", "live.view", "grid")
+	code, cfg, stderr := run(dir)
+	if code != 1 || cfg != nil {
+		t.Errorf("invalid live.view: code %d, config %+v; want 1 without starting", code, cfg)
+	}
+	if want := "git live: git config live.view: unknown view \"grid\", want list or tree\n"; stderr != want {
+		t.Errorf("stderr = %q, want %q", stderr, want)
+	}
+	// An invalid git config doesn't matter when --view is given.
+	if code, cfg, _ := run("--view", "tree", dir); code != 0 || cfg.view != treeView {
+		t.Errorf("--view with invalid live.view: code %d, config %+v", code, cfg)
 	}
 }
 
@@ -514,5 +552,23 @@ func TestRunApp(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("q did not quit")
+	}
+}
+
+func TestRunAppStartsInView(t *testing.T) {
+	dir, _, write := testRepo(t)
+	write("new.txt", "")
+	in, keys := io.Pipe()
+	defer keys.Close()
+	scr := &screen{added: make(chan struct{}, 1)}
+	size := func() (int, int, error) { return 80, 12, nil }
+	cfg := config{dir: dir, interval: 20 * time.Millisecond, view: treeView}
+	errc := make(chan error, 1)
+	go func() { errc <- runApp(cfg, in, scr, size, nil, nil) }()
+
+	scr.waitFor(t, "TREE", "new.txt (?)")
+	io.WriteString(keys, "q")
+	if err := <-errc; err != nil {
+		t.Fatalf("runApp returned %v", err)
 	}
 }

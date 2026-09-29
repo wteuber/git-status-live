@@ -51,14 +51,16 @@ type config struct {
 	dir       string
 	interval  time.Duration
 	untracked bool
+	view      view
 }
 
-const usage = `Usage: git live [-i interval] [-u] [path]
+const usage = `Usage: git live [-i interval] [-u] [--view list|tree] [path]
 
 Live git status. Keys: q quit, t/Tab toggle list/tree, ↑↓/jk scroll, r refresh.
 
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
   -u, --untracked    show untracked files in new directories
+  --view list|tree   view to start in (default: git config live.view, or list)
   -h                 show this help
 `
 
@@ -67,7 +69,8 @@ func main() {
 }
 
 // cli parses args, calls start with the resulting config and returns the
-// process exit code: 0 on success or -h, 1 if start fails, 2 for bad usage.
+// process exit code: 0 on success or -h, 1 if start fails or the git config
+// is invalid, 2 for bad usage.
 func cli(args []string, stdout, stderr io.Writer, start func(config) error) int {
 	fs := flag.NewFlagSet("git live", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // errors and usage are printed below
@@ -75,6 +78,12 @@ func cli(args []string, stdout, stderr io.Writer, start func(config) error) int 
 	fs.DurationVar(&cfg.interval, "i", 500*time.Millisecond, "")
 	fs.BoolVar(&cfg.untracked, "u", false, "")
 	fs.BoolVar(&cfg.untracked, "untracked", false, "")
+	viewSet := false
+	fs.Func("view", "", func(s string) (err error) {
+		cfg.view, err = parseView(s)
+		viewSet = true
+		return err
+	})
 	err := fs.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, usage)
@@ -87,6 +96,15 @@ func cli(args []string, stdout, stderr io.Writer, start func(config) error) int 
 		fmt.Fprintln(stderr, "git live:", err)
 		fmt.Fprint(stderr, usage)
 		return 2
+	}
+	// Without --view, start in the view from the git config, if any.
+	if !viewSet {
+		if s := gitConfig(cfg.dir, "live.view"); s != "" {
+			if cfg.view, err = parseView(s); err != nil {
+				fmt.Fprintln(stderr, "git live: git config live.view:", err)
+				return 1
+			}
+		}
 	}
 	if err := start(cfg); err != nil {
 		fmt.Fprintln(stderr, "git live:", err)
@@ -107,6 +125,17 @@ func parseArgs(args []string, interval time.Duration) (string, error) {
 		return args[0], nil
 	}
 	return "", fmt.Errorf("expected at most one path, got %q (flags go before the path)", args)
+}
+
+// parseView parses the name of a view, "list" or "tree", in any case.
+func parseView(s string) (view, error) {
+	switch strings.ToLower(s) {
+	case "list":
+		return listView, nil
+	case "tree":
+		return treeView, nil
+	}
+	return listView, fmt.Errorf("unknown view %q, want list or tree", s)
 }
 
 // runTerminal sets up the terminal and shows the live view until the user
@@ -148,7 +177,7 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 	keys := make(chan key)
 	go readKeys(in, keys)
 
-	a := &app{interval: cfg.interval}
+	a := &app{interval: cfg.interval, view: cfg.view}
 	return a.loop(events{
 		results: results,
 		keys:    keys,
