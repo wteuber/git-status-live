@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
 ### Added
 - `--view list|tree` option and `live.view` git config setting to choose the view `git live` starts in. `--view` takes precedence over `live.view`; without either, it starts in the list view as before.
 
@@ -28,5 +30,6 @@ First release.
 - Installation with a single command that also sets up the `git live` alias.
 - CI on Linux, macOS and Windows with the minimum and latest Go versions, and a minimum test coverage of 89%.
 
-[Unreleased]: https://github.com/wteuber/git-status-live/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/wteuber/git-status-live/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wteuber/git-status-live/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wteuber/git-status-live/releases/tag/v0.1.0
