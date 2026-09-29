@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Worktree list: `w` shows every worktree of the repository with its branch (or detached commit), a colored summary of its changes and its path, refreshed every interval while it is open. The watched worktree is marked with `*`. Locked worktrees are marked `locked`; prunable worktrees and bare repositories are listed but can't be selected.
+- Worktree list: `w` shows every worktree of the repository with its branch (or detached commit), a colored summary of its changes and its path, refreshed every interval while it is open. The list appears right away, and each summary shows `loading…` until git status in that worktree finishes. The watched worktree is marked with `*`. Locked worktrees are marked `locked`; prunable worktrees and bare repositories are listed but can't be selected.
 - Switch worktrees: select one with `↑`/`↓`/`j`/`k`, `PgUp`/`PgDn`/`Space` or `g`/`G`/`Home`/`End` and press `Enter` to watch it instead. `w` or `Esc` go back without switching.
 - Search worktrees: `/` shows only the worktrees whose name, branch or path contain every word typed, ignoring case. `Backspace` edits the search and `Esc` clears it.
 - `--help` prints the usage like `-h`, and the usage now links to the source at https://github.com/wteuber/git-status-live.

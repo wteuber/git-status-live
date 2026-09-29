@@ -106,6 +106,11 @@ untracked or in conflict, and dimmed if the worktree is clean. The list
 refreshes every interval while it is open, so you can watch several agents at
 work at once.
 
+The list shows up as soon as git has listed the worktrees. git status then runs
+in all of them in parallel, and each summary shows `loading…` until its own
+status is in, so one slow worktree doesn't hold up the others. When the list
+refreshes, the summaries keep their last status until the new one arrives.
+
 Select a worktree and press `Enter` to switch the live view to it. The header
 then shows its name:
 

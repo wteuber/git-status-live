@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWorktrees(t *testing.T) {
@@ -84,7 +85,7 @@ func TestLoadWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wts := loadWorktrees(dir, false)
+	wts := loadFinal(dir, false)
 	if wts.Err != nil {
 		t.Fatal(wts.Err)
 	}
@@ -112,7 +113,7 @@ func TestLoadWorktrees(t *testing.T) {
 	}
 
 	// Listing from a linked worktree gives the same list.
-	if again := loadWorktrees(feat, false); len(again.List) != 5 || again.List[0].Path != wts.List[0].Path {
+	if again := loadFinal(feat, false); len(again.List) != 5 || again.List[0].Path != wts.List[0].Path {
 		t.Errorf("from a linked worktree: %+v", again)
 	}
 
@@ -123,7 +124,7 @@ func TestLoadWorktrees(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(feat, "newdir", "a.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, w := range loadWorktrees(dir, true).List {
+	for _, w := range loadFinal(dir, true).List {
 		if w.Name() == "feat" && counts(w.Status.Entries) != "2 untracked" {
 			t.Errorf("untracked feat status = %q", counts(w.Status.Entries))
 		}
@@ -134,7 +135,7 @@ func TestLoadWorktreesBare(t *testing.T) {
 	dir, git, _ := testRepo(t)
 	bare := filepath.Join(t.TempDir(), "repo.git")
 	git("clone", "-q", "--bare", dir, bare)
-	wts := loadWorktrees(bare, false)
+	wts := loadFinal(bare, false)
 	if wts.Err != nil || len(wts.List) != 1 || !wts.List[0].Bare || wts.List[0].Status != nil {
 		t.Errorf("bare repository = %+v", wts)
 	}
@@ -143,17 +144,17 @@ func TestLoadWorktreesBare(t *testing.T) {
 func TestLoadWorktreesErrors(t *testing.T) {
 	notRepo := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
-	if wts := loadWorktrees(notRepo, false); wts.Err == nil || !strings.Contains(wts.Err.Error(), "not a git repository") {
+	if wts := loadFinal(notRepo, false); wts.Err == nil || !strings.Contains(wts.Err.Error(), "not a git repository") {
 		t.Errorf("non-repo error = %v", wts.Err)
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	if wts := loadWorktrees(".", false); wts.Err == nil || !strings.HasPrefix(wts.Err.Error(), "could not run git:") {
+	if wts := loadFinal(".", false); wts.Err == nil || !strings.HasPrefix(wts.Err.Error(), "could not run git:") {
 		t.Errorf("missing git error = %v", wts.Err)
 	}
 
 	silentFailingGit(t)
-	if wts := loadWorktrees(".", false); wts.Err == nil || wts.Err.Error() != "exit status 1" {
+	if wts := loadFinal(".", false); wts.Err == nil || wts.Err.Error() != "exit status 1" {
 		t.Errorf("silent git failure error = %v, want exit status 1", wts.Err)
 	}
 }
@@ -172,5 +173,144 @@ func TestGitRoot(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
 	if got := gitRoot(notRepo); got != "" {
 		t.Errorf("root outside a repository = %q, want empty", got)
+	}
+}
+
+// loadFinal loads the worktrees and returns the last update, which has
+// every status.
+func loadFinal(dir string, untracked bool) Worktrees {
+	var last Worktrees
+	loadWorktrees(dir, untracked, nil, func(wts Worktrees) bool { last = wts; return true })
+	return last
+}
+
+// TestLoadWorktreesUpdates checks that the list is sent before any git
+// status finishes, and then once per status.
+func TestLoadWorktreesUpdates(t *testing.T) {
+	dir, git, _ := testRepo(t)
+	parent := t.TempDir()
+	git("worktree", "add", "-q", "-b", "a", filepath.Join(parent, "a"))
+	git("worktree", "add", "-q", "-b", "b", filepath.Join(parent, "b"))
+	gone := filepath.Join(parent, "gone")
+	git("worktree", "add", "-q", "-b", "gone", gone)
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	var updates []Worktrees
+	list, ok := loadWorktrees(dir, false, nil, func(wts Worktrees) bool {
+		updates = append(updates, wts)
+		return true
+	})
+	if !ok || len(list) != 4 {
+		t.Fatalf("loadWorktrees = %d worktrees, %v", len(list), ok)
+	}
+	// The list, then one update for each of the 3 worktrees with a status.
+	if len(updates) != 4 {
+		t.Fatalf("got %d updates, want 4", len(updates))
+	}
+	loaded := func(wts Worktrees) (n int) {
+		for _, w := range wts.List {
+			if w.Status != nil {
+				n++
+			}
+		}
+		return n
+	}
+	for i, u := range updates {
+		if len(u.List) != 4 || loaded(u) != i {
+			t.Errorf("update %d: %d worktrees, %d statuses; want 4, %d", i, len(u.List), loaded(u), i)
+		}
+	}
+	// Updates are copies: later statuses don't change earlier updates.
+	if loaded(updates[0]) != 0 {
+		t.Error("the first update changed after it was sent")
+	}
+
+	// Loading again shows the previous statuses until the new ones arrive.
+	var first *Worktrees
+	loadWorktrees(dir, false, list, func(wts Worktrees) bool {
+		if first == nil {
+			first = &wts
+		}
+		return true
+	})
+	if loaded(*first) != 3 {
+		t.Errorf("first update of a reload has %d statuses, want the 3 previous ones", loaded(*first))
+	}
+
+	// A failed send stops loading.
+	for stopAt := 1; stopAt <= 2; stopAt++ {
+		sends := 0
+		list, ok := loadWorktrees(dir, false, nil, func(Worktrees) bool { sends++; return sends < stopAt })
+		if ok || list != nil || sends != stopAt {
+			t.Errorf("send failing at %d: ok %v, list %v, %d sends", stopAt, ok, list, sends)
+		}
+	}
+	// Also when the list itself fails.
+	notRepo := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notRepo))
+	if _, ok := loadWorktrees(notRepo, false, nil, func(Worktrees) bool { return false }); ok {
+		t.Error("a failed send of the error reported ok")
+	}
+}
+
+func TestPollWorktrees(t *testing.T) {
+	dir, git, _ := testRepo(t)
+	git("worktree", "add", "-q", "-b", "a", filepath.Join(t.TempDir(), "a"))
+	results := make(chan Worktrees)
+	kick := make(chan struct{}, 1)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		pollWorktrees(func() string { return dir }, false, time.Hour, results, kick, done)
+		close(finished)
+	}()
+	receive := func() Worktrees {
+		t.Helper()
+		select {
+		case wts := <-results:
+			return wts
+		case <-time.After(10 * time.Second):
+			t.Fatal("no update")
+		}
+		return Worktrees{}
+	}
+	// The list, then 2 statuses.
+	if wts := receive(); len(wts.List) != 2 || wts.List[0].Status != nil {
+		t.Fatalf("first update = %+v", wts)
+	}
+	receive()
+	if wts := receive(); wts.List[0].Status == nil || wts.List[1].Status == nil {
+		t.Fatalf("third update = %+v", wts)
+	}
+	// The interval is an hour, so another update can only come from a kick.
+	kick <- struct{}{}
+	if wts := receive(); wts.List[0].Status == nil {
+		t.Error("a reload started without the previous statuses")
+	}
+	// Closing done stops it, also while it waits to send an update.
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("pollWorktrees did not stop")
+	}
+
+	// And while it waits for the next interval.
+	done = make(chan struct{})
+	finished = make(chan struct{})
+	go func() {
+		pollWorktrees(func() string { return dir }, false, time.Hour, results, nil, done)
+		close(finished)
+	}()
+	for range 3 {
+		receive()
+	}
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("pollWorktrees did not stop while waiting")
 	}
 }

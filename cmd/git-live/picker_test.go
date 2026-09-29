@@ -259,9 +259,9 @@ func TestWorktreeLabels(t *testing.T) {
 		color   string
 	}{
 		{Worktree{Branch: "main", Status: &Status{}}, "main", "clean", ansiDim},
-		{Worktree{Branch: "main"}, "main", "…", ansiDim}, // status not known yet
+		{Worktree{Branch: "main"}, "main", "loading…", ansiDim}, // status not known yet
 		{Worktree{Bare: true}, "(bare)", "no working tree", ansiDim},
-		{Worktree{Detached: true, Head: "abc"}, "(detached abc)", "…", ansiDim},
+		{Worktree{Detached: true, Head: "abc"}, "(detached abc)", "loading…", ansiDim},
 		{Worktree{Branch: "x", Prunable: true, Locked: true}, "x", "missing, prunable, locked", ansiRed},
 		{Worktree{Branch: "x", Status: &Status{Entries: conflicts}}, "x", "3 conflicts", ansiRed},
 		{Worktree{Branch: "x", Status: &Status{Entries: []Entry{{X: 'M', Y: 'M'}}}}, "x", "1 staged, 1 unstaged", ansiRed},

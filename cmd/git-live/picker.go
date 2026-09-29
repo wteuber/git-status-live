@@ -214,7 +214,7 @@ func summary(w Worktree) string {
 	case w.Prunable:
 		s = "missing, prunable"
 	case w.Status == nil:
-		s = "…"
+		s = "loading…"
 	case w.Status.Err != nil:
 		s = "error: " + strings.SplitN(w.Status.Err.Error(), "\n", 2)[0]
 	case len(w.Status.Entries) == 0:

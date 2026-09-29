@@ -223,18 +223,17 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 	worktrees := make(chan Worktrees)
 	kickWorktrees := make(chan struct{}, 1)
 	var stopWorktrees chan struct{}
-	pollWorktrees := func(on bool) {
+	setWorktreePolling := func(on bool) {
 		if stopWorktrees != nil {
 			close(stopWorktrees)
 			stopWorktrees = nil
 		}
 		if on {
 			stopWorktrees = make(chan struct{})
-			load := func() Worktrees { return loadWorktrees(watched(), cfg.untracked) }
-			go poll(load, cfg.interval, worktrees, kickWorktrees, stopWorktrees)
+			go pollWorktrees(watched, cfg.untracked, cfg.interval, worktrees, kickWorktrees, stopWorktrees)
 		}
 	}
-	defer pollWorktrees(false)
+	defer setWorktreePolling(false)
 
 	a := &app{interval: cfg.interval, view: cfg.view, dir: cfg.dir}
 	return a.loop(events{
@@ -255,7 +254,7 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 			default:
 			}
 		},
-		pollWorktrees: pollWorktrees,
+		pollWorktrees: setWorktreePolling,
 	}, out)
 }
 
