@@ -245,7 +245,7 @@ Changes not staged for commit:
 Untracked files:
         cmd/git-live/scratch.txt
 
- q quit  t/Tab toggle view  ↑↓/jk scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh
 ```
 
 Press `t` to switch to the tree view:
@@ -261,7 +261,7 @@ Press `t` to switch to the tree view:
 ├── NOTES.md (A+M)
 └── README.md (M)
 
- q quit  t/Tab toggle view  ↑↓/jk scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh
 ```
 
 Leave `git live` running while you stage (`git add NOTES.md`), commit or revert
