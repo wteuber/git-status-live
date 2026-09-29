@@ -10,9 +10,11 @@ import (
 // picker is the worktree list: it shows every worktree of the repository
 // and lets the user switch the live view to another one.
 type picker struct {
-	wts      *Worktrees // nil until the first list arrives
-	selected string     // path of the selected worktree
-	scroll   int
+	wts       *Worktrees // nil until the first list arrives
+	selected  string     // path of the selected worktree
+	scroll    int
+	searching bool   // typing a search
+	query     string // shows only the worktrees that match it
 }
 
 // openPicker shows the worktree list, with the watched worktree selected.
@@ -29,7 +31,12 @@ func (p *picker) items() ([]Worktree, int) {
 	if p.wts == nil {
 		return nil, 0
 	}
-	list := p.wts.List
+	var list []Worktree
+	for _, w := range p.wts.List {
+		if matches(w, p.query) {
+			list = append(list, w)
+		}
+	}
 	for i, w := range list {
 		if w.Path == p.selected {
 			return list, i
@@ -38,9 +45,43 @@ func (p *picker) items() ([]Worktree, int) {
 	return list, 0
 }
 
+// matches reports whether a worktree's name, branch or path contains every
+// word of query, ignoring case.
+func matches(w Worktree, query string) bool {
+	text := strings.ToLower(w.Name() + " " + branchLabel(w) + " " + w.Path)
+	for _, word := range strings.Fields(strings.ToLower(query)) {
+		if !strings.Contains(text, word) {
+			return false
+		}
+	}
+	return true
+}
+
 // handlePickerKey applies a key press while the worktree list is shown.
 func (a *app) handlePickerKey(k key) (quit, refresh bool) {
-	items, i := a.picker.items()
+	p := a.picker
+	if p.searching {
+		switch {
+		case k.code == keyEsc:
+			p.searching, p.query = false, ""
+			return false, false
+		case k.code == keyBackspace:
+			if p.query == "" {
+				p.searching = false
+			}
+			r := []rune(p.query)
+			p.query = string(r[:max(len(r)-1, 0)])
+			return false, false
+		case k.code == keyChar:
+			p.query += string(k.r)
+			return false, false
+		}
+		// Enter, Ctrl-C and the cursor keys work as they do without a search.
+	} else if k.is('/') {
+		p.searching = true
+		return false, false
+	}
+	items, i := p.items()
 	switch {
 	case k.code == keyQuit, k.is('q'), k.is('Q'):
 		return true, false
@@ -68,7 +109,7 @@ func (a *app) handlePickerKey(k key) (quit, refresh bool) {
 		i = len(items) - 1
 	}
 	if len(items) > 0 {
-		a.picker.selected = items[min(max(i, 0), len(items)-1)].Path
+		p.selected = items[min(max(i, 0), len(items)-1)].Path
 	}
 	return false, false
 }
@@ -86,8 +127,16 @@ func (a *app) switchTo(path string) {
 
 func (a *app) pickerHeader() string {
 	s := " WORKTREES"
-	if p := a.picker; p.wts != nil && p.wts.Err == nil {
-		s += "  │  " + plural(len(p.wts.List), "worktree")
+	p := a.picker
+	if p.wts != nil && p.wts.Err == nil {
+		all := plural(len(p.wts.List), "worktree")
+		if items, _ := p.items(); p.query != "" {
+			all = fmt.Sprintf("%d of %s", len(items), all)
+		}
+		s += "  │  " + all
+	}
+	if p.searching {
+		s += "  │  /" + p.query + "▏"
 	}
 	return s
 }
@@ -110,6 +159,9 @@ func (a *app) pickerBody() ([]string, int) {
 		return a.errorLines(p.wts.Err), -1
 	}
 	items, sel := p.items()
+	if len(items) == 0 && p.query != "" {
+		return []string{dim(fmt.Sprintf("No worktree matches %q.", p.query))}, -1
+	}
 	current := ""
 	if a.status != nil {
 		current = a.status.Root

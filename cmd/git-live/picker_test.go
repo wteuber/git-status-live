@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestPickerFrame(t *testing.T) {
 		"  repo-review  (detached 0123456)  error: fatal: bad                /src/repo-review",
 		"  repo-gone    gone                missing, prunable                /src/repo-gone",
 		"", "",
-		" enter switch  ↑↓/jk select  w/esc back  r refresh  q quit",
+		" enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit",
 	}
 	for i, w := range want {
 		if got := strings.TrimRight(stripANSI(rows[i]), " "); got != w {
@@ -294,5 +295,145 @@ func TestHomePath(t *testing.T) {
 	t.Setenv("USERPROFILE", "")
 	if got := homePath("/home/me/src"); got != "/home/me/src" {
 		t.Errorf("without a home directory: %q", got)
+	}
+}
+
+func TestPickerSearch(t *testing.T) {
+	a := pickerApp(100, 9)
+	header := func() string { return strings.TrimSpace(stripANSI(a.frame()[0])) }
+	names := func() []string {
+		items, _ := a.picker.items()
+		var got []string
+		for _, w := range items {
+			got = append(got, w.Name())
+		}
+		return got
+	}
+	typeText := func(s string) {
+		for _, r := range s {
+			a.handleKey(char(r))
+		}
+	}
+
+	a.handleKey(char('/'))
+	if got := header(); got != "WORKTREES  │  5 worktrees  │  /▏" {
+		t.Errorf("header when the search starts = %q", got)
+	}
+	if footer := stripANSI(a.frame()[8]); !strings.HasPrefix(footer, " type to search") {
+		t.Errorf("footer while searching = %q", footer)
+	}
+
+	// Keys that do something else without a search are text now.
+	typeText("Q")
+	if a.picker == nil || a.picker.query != "Q" {
+		t.Fatalf("q while searching: picker %v", a.picker)
+	}
+	if got := names(); got != nil {
+		t.Errorf("Q matches %v", got)
+	}
+	a.handleKey(press(keyBackspace))
+
+	// Words match the name, branch or path, in any case and order.
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"agent", []string{"repo-agent"}},                              // name
+		{"CLAUDE/", []string{"repo-agent"}},                            // branch, any case
+		{"detached", []string{"repo-review"}},                          // detached label
+		{"/src/repo-s", []string{"repo-staged"}},                       // path
+		{"repo g", []string{"repo-agent", "repo-staged", "repo-gone"}}, // g: agent, staged, gone
+		{"login claude", []string{"repo-agent"}},                       // every word, any order
+		{"  feat  ", []string{"repo-staged"}},                          // extra spaces
+		{"nothing", nil},
+	} {
+		a.picker.query = ""
+		typeText(tc.query)
+		if got := names(); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("search %q = %v, want %v", tc.query, got, tc.want)
+		}
+	}
+	// No match: a message, and the header counts what's left.
+	if got := plain(a.frame()[1:2]); got != `No worktree matches "nothing".` {
+		t.Errorf("no match = %q", got)
+	}
+	if got := header(); got != "WORKTREES  │  0 of 5 worktrees  │  /nothing▏" {
+		t.Errorf("header without matches = %q", got)
+	}
+	a.handleKey(press(keyEnter)) // nothing to switch to
+	if a.picker == nil || a.dir != "/src/repo" {
+		t.Errorf("Enter without matches: picker %v, dir %q", a.picker, a.dir)
+	}
+
+	// Backspace edits the search. The first match is selected when the
+	// selected worktree doesn't match.
+	a.picker.query = ""
+	typeText("repo-s")
+	if got := header(); got != "WORKTREES  │  1 of 5 worktrees  │  /repo-s▏" {
+		t.Errorf("header = %q", got)
+	}
+	a.handleKey(press(keyBackspace))
+	a.handleKey(press(keyBackspace))
+	if a.picker.query != "repo" || len(names()) != 5 {
+		t.Errorf("after two backspaces: query %q, %d matches", a.picker.query, len(names()))
+	}
+
+	// Arrows select among the matches, and Enter switches.
+	a.picker.query = ""
+	typeText("repo-")
+	a.handleKey(press(keyDown))
+	a.handleKey(press(keyDown))
+	a.handleKey(press(keyUp))
+	a.handleKey(press(keyEnter))
+	if a.picker != nil || a.dir != "/src/repo-staged" {
+		t.Errorf("after selecting a match: picker %v, dir %q", a.picker, a.dir)
+	}
+}
+
+func TestPickerSearchCancel(t *testing.T) {
+	a := pickerApp(100, 9)
+	a.handleKey(char('/'))
+	a.handleKey(char('a'))
+	// Escape clears the search, and a second one closes the list.
+	a.handleKey(press(keyEsc))
+	if a.picker == nil || a.picker.searching || a.picker.query != "" {
+		t.Fatalf("after Escape: %+v", a.picker)
+	}
+	if got := strings.TrimSpace(stripANSI(a.frame()[0])); got != "WORKTREES  │  5 worktrees" {
+		t.Errorf("header after Escape = %q", got)
+	}
+	a.handleKey(press(keyEsc))
+	if a.picker != nil {
+		t.Error("the second Escape did not close the list")
+	}
+
+	// Backspace on an empty search ends it.
+	a = pickerApp(100, 9)
+	a.handleKey(char('/'))
+	a.handleKey(press(keyBackspace))
+	if a.picker.searching {
+		t.Error("Backspace on an empty search didn't end it")
+	}
+
+	// Multi-byte characters are deleted whole.
+	a.handleKey(char('/'))
+	a.handleKey(char('ü'))
+	a.handleKey(char('x'))
+	a.handleKey(press(keyBackspace))
+	if a.picker.query != "ü" {
+		t.Errorf("query = %q, want ü", a.picker.query)
+	}
+	a.handleKey(press(keyBackspace))
+	if a.picker.query != "" || !a.picker.searching {
+		t.Errorf("query = %q, searching %v", a.picker.query, a.picker.searching)
+	}
+
+	// Ctrl-C quits while searching, and Tab is ignored.
+	a.handleKey(press(keyTab))
+	if !a.picker.searching || a.picker.query != "" {
+		t.Errorf("Tab changed the search: %+v", a.picker)
+	}
+	if quit, _ := a.handleKey(press(keyQuit)); !quit {
+		t.Error("Ctrl-C did not quit while searching")
 	}
 }

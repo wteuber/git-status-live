@@ -700,6 +700,14 @@ func TestRunAppWorktrees(t *testing.T) {
 	io.WriteString(keys, "\x1b")
 	scr.waitFor(t, "LIST", "feat-wt")
 
+	// Search for the main worktree by its branch and switch back to it.
+	io.WriteString(keys, "w")
+	scr.waitFor(t, "WORKTREES", "2 worktrees")
+	io.WriteString(keys, "/main")
+	scr.waitFor(t, "1 of 2 worktrees", "/main▏", mainName)
+	io.WriteString(keys, "\r")
+	scr.waitFor(t, "LIST", mainName, "main-only.txt")
+
 	io.WriteString(keys, "q")
 	select {
 	case err := <-errc:

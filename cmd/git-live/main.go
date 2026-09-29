@@ -474,7 +474,10 @@ func (a *app) frame() []string {
 		if sel >= 0 { // keep the selection on the screen
 			*scroll = max(min(*scroll, sel), sel-bodyH+1)
 		}
-		footer = " enter switch  ↑↓/jk select  w/esc back  r refresh  q quit"
+		footer = " enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit"
+		if a.picker.searching {
+			footer = " type to search  enter switch  ↑↓ select  esc clear  ctrl-c quit"
+		}
 	}
 	*scroll = min(max(*scroll, 0), max(len(body)-bodyH, 0))
 
