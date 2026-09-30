@@ -34,10 +34,12 @@ type Worktrees struct {
 	Err  error
 }
 
-// pollWorktrees loads the worktrees of the repository in dir() repeatedly,
-// waiting interval between loads, and sends every update to results. A
-// send on kick skips the wait; closing done stops it.
-func pollWorktrees(dir func() string, untracked bool, interval time.Duration, results chan<- Worktrees, kick <-chan struct{}, done <-chan struct{}) {
+// pollWorktrees loads the worktrees of the repository in the watched
+// directory repeatedly, waiting interval between loads, and sends every
+// update to results. watched returns the directory, and whether to list the
+// files in untracked directories. A send on kick skips the wait; closing
+// done stops it.
+func pollWorktrees(watched func() (dir string, untracked bool), interval time.Duration, results chan<- Worktrees, kick <-chan struct{}, done <-chan struct{}) {
 	send := func(wts Worktrees) bool {
 		select {
 		case results <- wts:
@@ -49,7 +51,8 @@ func pollWorktrees(dir func() string, untracked bool, interval time.Duration, re
 	var prev []Worktree
 	for {
 		var ok bool
-		if prev, ok = loadWorktrees(dir(), untracked, prev, send); !ok {
+		dir, untracked := watched()
+		if prev, ok = loadWorktrees(dir, untracked, prev, send); !ok {
 			return
 		}
 		select {

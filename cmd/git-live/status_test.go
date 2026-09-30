@@ -143,6 +143,9 @@ func TestRunStatus(t *testing.T) {
 	if st.Err != nil {
 		t.Fatal(st.Err)
 	}
+	if !st.Untracked || st.Dir != dir {
+		t.Errorf("status records dir %q, untracked %v", st.Dir, st.Untracked)
+	}
 	want = []Entry{
 		{X: ' ', Y: 'M', Path: "changed.txt"},
 		{X: 'R', Y: ' ', Path: "new name.txt", OrigPath: "old name.txt"},

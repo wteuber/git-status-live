@@ -91,6 +91,9 @@ func (a *app) handlePickerKey(k key) (quit, refresh bool) {
 	case k.code == keyEsc, k.is('w'), k.is('W'):
 		a.picker = nil
 		return false, false
+	case k.is('u'), k.is('U'):
+		a.untracked = !a.untracked
+		return false, false
 	case k.code == keyEnter:
 		if i < len(items) && items[i].Selectable() {
 			a.switchTo(items[i].Path)
@@ -131,7 +134,7 @@ func (a *app) switchTo(path string) {
 }
 
 func (a *app) pickerHeader() string {
-	s := " WORKTREES"
+	s := " WORKTREES" + a.untrackedMark()
 	p := a.picker
 	if p.wts != nil && p.wts.Err == nil {
 		all := plural(len(p.wts.List), "worktree")

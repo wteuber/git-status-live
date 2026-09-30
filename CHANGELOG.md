@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Switch worktrees: select one with `↑`/`↓`/`j`/`k`, `PgUp`/`PgDn`/`Space` or `g`/`G`/`Home`/`End` and press `Enter` to watch it instead. `w` or `Esc` go back without switching.
 - Search worktrees: `/` shows only the worktrees whose name, branch or path contain every word typed, ignoring case. `Backspace` edits the search and `Esc` clears it.
 - Scroll sideways with `←`/`→` or `h`/`l`, half a screen at a time, to see lines that are cut off at the right edge, e.g. long paths in the worktree list. The footer shows the first visible column.
+- `u` toggles `-u`/`--untracked` while git live is running, in the list, the tree and the worktree list. The header shows `-u` while it is on.
 - `--help` prints the usage like `-h`, and the usage now links to the source at https://github.com/wteuber/git-status-live.
 
 ### Changed

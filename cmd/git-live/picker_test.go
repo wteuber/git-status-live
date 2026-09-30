@@ -43,7 +43,7 @@ func TestPickerFrame(t *testing.T) {
 		"  repo-review  (detached 0123456)  error: fatal: bad                /src/repo-review",
 		"  repo-gone    gone                missing, prunable                /src/repo-gone",
 		"", "",
-		" enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit",
+		" enter switch  ↑↓/jk select  ←→/hl scroll  / search  u untracked  w/esc back  r refresh  q quit",
 	}
 	for i, w := range want {
 		if got := strings.TrimRight(stripANSI(rows[i]), " "); got != w {

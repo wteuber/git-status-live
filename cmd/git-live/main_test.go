@@ -243,7 +243,7 @@ type loopHarness struct {
 	out           countingWriter
 	app           *app
 	err           chan error
-	watched       []string // directories the loop switched to
+	watched       []string // directories the loop switched to, with " -u" if untracked
 	polling       []bool   // calls to start (true) or stop (false) the worktree poll
 }
 
@@ -266,7 +266,12 @@ func startLoop(t *testing.T) *loopHarness {
 		kick: h.kick, kickWorktrees: h.kickWorktrees,
 		size: func() (int, int, error) { return h.width, 8, nil },
 		// Called by the loop goroutine; the test reads them after stop.
-		watch:         func(dir string) { h.watched = append(h.watched, dir) },
+		watch: func(dir string, untracked bool) {
+			if untracked {
+				dir += " -u"
+			}
+			h.watched = append(h.watched, dir)
+		},
 		pollWorktrees: func(on bool) { h.polling = append(h.polling, on) },
 	}
 	go func() { h.err <- h.app.loop(ev, &h.out) }()
@@ -367,6 +372,58 @@ func TestLoopWorktrees(t *testing.T) {
 		if strings.Contains(stripANSI(f), "│  main") {
 			t.Errorf("a stale status from the old worktree was drawn:\n%s", stripANSI(f))
 		}
+	}
+}
+
+func TestToggleUntracked(t *testing.T) {
+	a := &app{width: 60, height: 5, status: &Status{Branch: "main"}}
+	header := func() string { return strings.TrimSpace(stripANSI(a.frame()[0])) }
+	a.handleKey(char('u'))
+	if !a.untracked || !strings.HasPrefix(header(), "LIST -u  │") {
+		t.Errorf("after u: untracked %v, header %q", a.untracked, header())
+	}
+	a.handleKey(char('t'))
+	if !strings.HasPrefix(header(), "TREE -u  │") {
+		t.Errorf("tree header = %q", header())
+	}
+	a.handleKey(char('U'))
+	if a.untracked || !strings.HasPrefix(header(), "TREE  │") {
+		t.Errorf("after U: untracked %v, header %q", a.untracked, header())
+	}
+
+	// In the worktree list too, but not while searching.
+	a.handleKey(char('w'))
+	a.handleKey(char('u'))
+	if !a.untracked || header() != "WORKTREES -u" {
+		t.Errorf("worktree list: untracked %v, header %q", a.untracked, header())
+	}
+	a.handleKey(char('/'))
+	a.handleKey(char('u'))
+	if !a.untracked || a.picker.query != "u" {
+		t.Errorf("searching: untracked %v, query %q", a.untracked, a.picker.query)
+	}
+}
+
+func TestLoopToggleUntracked(t *testing.T) {
+	h := startLoop(t)
+	h.app.dir = "/src/repo"
+	h.results <- Status{Dir: "/src/repo", Branch: "before"}
+	h.keys <- char('u')
+	h.results <- Status{Dir: "/src/repo", Branch: "stale"} // started before the toggle
+	h.results <- Status{Dir: "/src/repo", Untracked: true, Branch: "after"}
+	h.keys <- char('u')
+	h.stop(t)
+
+	if want := []string{"/src/repo -u", "/src/repo"}; !reflect.DeepEqual(h.watched, want) {
+		t.Errorf("watched = %q, want %q", h.watched, want)
+	}
+	for _, f := range h.out.frames {
+		if strings.Contains(stripANSI(f), "stale") {
+			t.Errorf("drew a status from before the toggle:\n%s", stripANSI(f))
+		}
+	}
+	if last := stripANSI(h.out.frames[len(h.out.frames)-1]); !strings.Contains(last, "after") || strings.Contains(last, "-u") {
+		t.Errorf("last frame:\n%s", last)
 	}
 }
 
@@ -779,6 +836,37 @@ func TestRunAppWorktrees(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("q did not quit")
+	}
+}
+
+// TestRunAppToggleUntracked toggles -u at runtime against a real repository.
+func TestRunAppToggleUntracked(t *testing.T) {
+	dir, _, write := testRepo(t)
+	write(filepath.Join("newdir", "a.txt"), "")
+	write(filepath.Join("newdir", "b.txt"), "")
+	in, keys := io.Pipe()
+	defer keys.Close()
+	scr := &screen{added: make(chan struct{}, 1)}
+	size := func() (int, int, error) { return 100, 12, nil }
+	errc := make(chan error, 1)
+	go func() { errc <- runApp(config{dir: dir, interval: time.Hour}, in, scr, size, nil, nil) }()
+
+	// The interval is an hour, so updates can only come from the toggle.
+	scr.waitFor(t, "LIST  │", "newdir/", "1 untracked")
+	io.WriteString(keys, "u")
+	scr.waitFor(t, "LIST -u  │", "newdir/a.txt", "newdir/b.txt", "2 untracked")
+
+	// The worktree list counts the same way, and u works there too.
+	io.WriteString(keys, "w")
+	scr.waitFor(t, "WORKTREES -u", "2 untracked")
+	io.WriteString(keys, "u")
+	scr.waitFor(t, "WORKTREES  │", "1 untracked")
+	io.WriteString(keys, "w")
+	scr.waitFor(t, "LIST  │", "newdir/", "1 untracked")
+
+	io.WriteString(keys, "q")
+	if err := <-errc; err != nil {
+		t.Fatalf("runApp returned %v", err)
 	}
 }
 

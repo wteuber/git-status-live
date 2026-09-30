@@ -19,11 +19,12 @@ type Entry struct {
 
 // Status is the result of a single `git status` run.
 type Status struct {
-	Branch  string // branch line without the leading "## "
-	Entries []Entry
-	Err     error
-	Dir     string // the directory git status ran in
-	Root    string // top-level directory of the worktree, if known
+	Branch    string // branch line without the leading "## "
+	Entries   []Entry
+	Err       error
+	Dir       string // the directory git status ran in
+	Untracked bool   // whether it listed the files in untracked directories
+	Root      string // top-level directory of the worktree, if known
 }
 
 func (e Entry) Untracked() bool { return e.X == '?' && e.Y == '?' }
@@ -62,7 +63,7 @@ func runStatus(dir string, untracked bool) Status {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	st := Status{Dir: dir}
+	st := Status{Dir: dir, Untracked: untracked}
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {

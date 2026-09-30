@@ -263,7 +263,7 @@ func TestPollWorktrees(t *testing.T) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		pollWorktrees(func() string { return dir }, false, time.Hour, results, kick, done)
+		pollWorktrees(func() (string, bool) { return dir, false }, time.Hour, results, kick, done)
 		close(finished)
 	}()
 	receive := func() Worktrees {
@@ -301,7 +301,7 @@ func TestPollWorktrees(t *testing.T) {
 	done = make(chan struct{})
 	finished = make(chan struct{})
 	go func() {
-		pollWorktrees(func() string { return dir }, false, time.Hour, results, nil, done)
+		pollWorktrees(func() (string, bool) { return dir, false }, time.Hour, results, nil, done)
 		close(finished)
 	}()
 	for range 3 {

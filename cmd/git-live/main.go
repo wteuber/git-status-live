@@ -57,15 +57,16 @@ func char(r rune) key { return key{code: keyChar, r: r} }
 func (k key) is(r rune) bool { return k.code == keyChar && k.r == r }
 
 type app struct {
-	interval time.Duration
-	dir      string  // the directory being watched
-	status   *Status // nil until the first run in dir finishes
-	view     view
-	scroll   int
-	hscroll  int     // columns scrolled to the right
-	picker   *picker // the worktree list, while it is shown
-	width    int
-	height   int
+	interval  time.Duration
+	dir       string  // the directory being watched
+	untracked bool    // list the files in untracked directories (-u)
+	status    *Status // nil until the first run in dir finishes
+	view      view
+	scroll    int
+	hscroll   int     // columns scrolled to the right
+	picker    *picker // the worktree list, while it is shown
+	width     int
+	height    int
 }
 
 // config is what the command line asks for.
@@ -79,10 +80,10 @@ type config struct {
 const usage = `Usage: git live [-i interval] [-u] [--view list|tree] [path]
 
 Live git status. Keys: q quit, t/Tab toggle list/tree, w worktrees,
-↑↓←→/hjkl scroll, r refresh.
+u toggle -u, ↑↓←→/hjkl scroll, r refresh.
 
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
-  -u, --untracked    show untracked files in new directories
+  -u, --untracked    show untracked files in new directories (u toggles it)
   --view list|tree   view to start in (default: git config live.view, or list)
   -h, --help         show this help
 
@@ -193,13 +194,14 @@ func runTerminal(cfg config) error {
 // runApp connects git polling and key input to the main loop and runs it
 // until the user quits. It reads keys from in and draws to out.
 func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, error), quit <-chan os.Signal, tick <-chan time.Time) error {
-	// The directory to watch changes when the user picks another worktree.
+	// What to watch changes when the user picks another worktree or
+	// toggles untracked files.
 	var mu sync.Mutex
-	dir := cfg.dir
-	watched := func() string {
+	dir, untracked := cfg.dir, cfg.untracked
+	watched := func() (string, bool) {
 		mu.Lock()
 		defer mu.Unlock()
-		return dir
+		return dir, untracked
 	}
 
 	done := make(chan struct{})
@@ -208,8 +210,8 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 	kick := make(chan struct{}, 1)
 	roots := map[string]string{} // worktree of each watched directory
 	status := func() Status {
-		d := watched()
-		st := runStatus(d, cfg.untracked)
+		d, u := watched()
+		st := runStatus(d, u)
 		if st.Err == nil {
 			if roots[d] == "" {
 				roots[d] = gitRoot(d)
@@ -233,12 +235,12 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 		}
 		if on {
 			stopWorktrees = make(chan struct{})
-			go pollWorktrees(watched, cfg.untracked, cfg.interval, worktrees, kickWorktrees, stopWorktrees)
+			go pollWorktrees(watched, cfg.interval, worktrees, kickWorktrees, stopWorktrees)
 		}
 	}
 	defer setWorktreePolling(false)
 
-	a := &app{interval: cfg.interval, view: cfg.view, dir: cfg.dir}
+	a := &app{interval: cfg.interval, view: cfg.view, dir: cfg.dir, untracked: cfg.untracked}
 	return a.loop(events{
 		results:       results,
 		worktrees:     worktrees,
@@ -248,13 +250,15 @@ func runApp(cfg config, in io.Reader, out io.Writer, size func() (int, int, erro
 		size:          size,
 		kick:          kick,
 		kickWorktrees: kickWorktrees,
-		watch: func(d string) {
+		watch: func(d string, u bool) {
 			mu.Lock()
-			dir = d
+			dir, untracked = d, u
 			mu.Unlock()
-			select {
-			case kick <- struct{}{}:
-			default:
+			for _, c := range []chan struct{}{kick, kickWorktrees} {
+				select {
+				case c <- struct{}{}:
+				default:
+				}
 			}
 		},
 		pollWorktrees: setWorktreePolling,
@@ -269,10 +273,10 @@ type events struct {
 	quit          <-chan os.Signal
 	tick          <-chan time.Time // when to check the terminal size
 	size          func() (width, height int, err error)
-	kick          chan<- struct{}  // asks for a git status now
-	kickWorktrees chan<- struct{}  // asks for the worktree list now
-	watch         func(dir string) // watches another directory from now on
-	pollWorktrees func(on bool)    // starts or stops polling the worktree list
+	kick          chan<- struct{}                  // asks for a git status now
+	kickWorktrees chan<- struct{}                  // asks for the worktree list now
+	watch         func(dir string, untracked bool) // changes what to watch from now on
+	pollWorktrees func(on bool)                    // starts or stops polling the worktree list
 }
 
 // loop handles events until the user quits, writing a frame to out only
@@ -285,8 +289,8 @@ func (a *app) loop(ev events, out io.Writer) error {
 	for {
 		select {
 		case st := <-ev.results:
-			if st.Dir != a.dir {
-				continue // started before switching to another worktree
+			if st.Dir != a.dir || st.Untracked != a.untracked {
+				continue // started before switching worktrees or toggling -u
 			}
 			a.status = &st
 		case wts := <-ev.worktrees:
@@ -295,7 +299,7 @@ func (a *app) loop(ev events, out io.Writer) error {
 			}
 			a.picker.wts = &wts
 		case k := <-ev.keys:
-			dir, picking := a.dir, a.picker != nil
+			dir, untracked, picking := a.dir, a.untracked, a.picker != nil
 			quit, refresh := a.handleKey(k)
 			if quit {
 				return nil
@@ -308,8 +312,8 @@ func (a *app) loop(ev events, out io.Writer) error {
 					}
 				}
 			}
-			if a.dir != dir {
-				ev.watch(a.dir)
+			if a.dir != dir || a.untracked != untracked {
+				ev.watch(a.dir, a.untracked)
 			}
 			if picking != (a.picker != nil) {
 				ev.pollWorktrees(!picking)
@@ -438,6 +442,8 @@ func (a *app) handleKey(k key) (quit, refresh bool) {
 		return false, true
 	case k.is('w'), k.is('W'):
 		a.openPicker()
+	case k.is('u'), k.is('U'):
+		a.untracked = !a.untracked
 	case k.code == keyTab, k.is('t'), k.is('T'):
 		a.view = 1 - a.view
 		a.scroll, a.hscroll = 0, 0
@@ -461,6 +467,15 @@ func (a *app) handleKey(k key) (quit, refresh bool) {
 	return false, false
 }
 
+// untrackedMark marks the header while untracked files are listed one by
+// one, like the -u flag does.
+func (a *app) untrackedMark() string {
+	if a.untracked {
+		return " -u"
+	}
+	return ""
+}
+
 // panStep is how far ← and → scroll: half the screen, like less.
 func (a *app) panStep() int { return max(a.width/2, 1) }
 
@@ -481,13 +496,13 @@ func (a *app) frame() []string {
 	bodyH := a.bodyHeight()
 	body, sel := a.body()
 	scroll, hscroll := &a.scroll, &a.hscroll
-	footer := " q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh"
+	footer := " q quit  t/Tab toggle view  w worktrees  u untracked  ↑↓←→/hjkl scroll  r refresh"
 	if a.picker != nil {
 		scroll, hscroll = &a.picker.scroll, &a.picker.hscroll
 		if sel >= 0 { // keep the selection on the screen
 			*scroll = max(min(*scroll, sel), sel-bodyH+1)
 		}
-		footer = " enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit"
+		footer = " enter switch  ↑↓/jk select  ←→/hl scroll  / search  u untracked  w/esc back  r refresh  q quit"
 		if a.picker.searching {
 			footer = " type to search  enter switch  ↑↓ select  ←→ scroll  esc clear  ctrl-c quit"
 		}
@@ -539,7 +554,7 @@ func (a *app) header() string {
 	if a.view == treeView {
 		name = "TREE"
 	}
-	left := " " + name
+	left := " " + name + a.untrackedMark()
 	if a.status != nil && a.status.Err == nil {
 		if a.status.Root != "" {
 			left += "  │  " + Worktree{Path: a.status.Root}.Name()

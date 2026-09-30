@@ -72,16 +72,18 @@ git live
 | `q`, `Ctrl-C`           | Quit                          |
 | `t`, `Tab`              | Toggle between list and tree  |
 | `w`                     | Show the [worktrees](#worktrees) |
+| `u`                     | Toggle untracked files in new directories (`-u`) |
 | `↑` `↓`, `k` `j`        | Scroll one line               |
 | `←` `→`, `h` `l`        | Scroll sideways by half a screen |
 | `PgUp` `PgDn`, `Space`  | Scroll one page               |
 | `g` `G`, `Home` `End`   | Jump to top / bottom          |
 | `r`                     | Refresh now                   |
 
-The header shows the current view, the name of the worktree (its directory),
-the branch with its upstream and ahead/behind counts, and how many files are
-staged, unstaged, untracked or in conflict. When the list is longer than the
-screen, the footer shows which lines are visible (`1-20/57`).
+The header shows the current view (with `-u` while untracked files are listed
+one by one), the name of the worktree (its directory), the branch with its
+upstream and ahead/behind counts, and how many files are staged, unstaged,
+untracked or in conflict. When the list is longer than the screen, the footer
+shows which lines are visible (`1-20/57`).
 
 Lines that are wider than the terminal are cut off at the right edge. Scroll
 sideways with `←` `→` (or `h` `l`) to see the rest; the footer then shows the
@@ -101,7 +103,7 @@ them:
   shop-agent-2  claude/add-tests     1 staged, 2 untracked  ~/src/shop-agent-2
   shop-review   (detached 4945c5b)   clean                  ~/src/shop-review
 
- enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit
+ enter switch  ↑↓/jk select  ←→/hl scroll  / search  u untracked  w/esc back  r refresh  q quit
 ```
 
 Each row shows the worktree's directory name, its branch (or the commit, if
@@ -155,6 +157,7 @@ While you search, the keys type text, except for the ones below.
 | `PgUp` `PgDn`, `Space`  | Move the selection by one page                  |
 | `g` `G`, `Home` `End`   | Select the first / last worktree                |
 | `/`                     | Search                                          |
+| `u`                     | Toggle untracked files in new directories (`-u`) |
 | `w`, `Esc`              | Back to the list or tree, without switching     |
 | `r`                     | Refresh now                                     |
 | `q`, `Ctrl-C`           | Quit                                            |
@@ -191,7 +194,7 @@ works the same way, e.g. `git live ~/src/shop-agent-1`.
 git live [-i interval] [-u] [--view list|tree] [path]
 
 -i duration        Refresh interval, e.g. 250ms or 2s (default 500ms)
--u, --untracked    Show untracked files in new directories
+-u, --untracked    Show untracked files in new directories (toggle with u)
 --view list|tree   View to start in (default: git config live.view, or list)
 -h, --help         Show help message and a link to this repository
 path               Repository to watch (default: current directory)
@@ -210,6 +213,9 @@ git live                    git live -u
                             │   └── a.txt (?)
                             └── top.txt (?)
 ```
+
+Press `u` while git live is running to switch between the two. The header shows
+`-u` while every file is listed, e.g. ` LIST -u  │  …`.
 
 **Note:** Due to how git handles aliases, `git live --help` shows the alias
 expansion instead of the help message: git turns `--help` into `git help live`
@@ -258,7 +264,7 @@ Changes not staged for commit:
 Untracked files:
         cmd/git-live/scratch.txt
 
- q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  u untracked  ↑↓←→/hjkl scroll  r refresh
 ```
 
 Press `t` to switch to the tree view:
@@ -274,7 +280,7 @@ Press `t` to switch to the tree view:
 ├── NOTES.md (A+M)
 └── README.md (M)
 
- q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  u untracked  ↑↓←→/hjkl scroll  r refresh
 ```
 
 Leave `git live` running while you stage (`git add NOTES.md`), commit or revert
