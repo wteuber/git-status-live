@@ -43,7 +43,7 @@ func TestPickerFrame(t *testing.T) {
 		"  repo-review  (detached 0123456)  error: fatal: bad                /src/repo-review",
 		"  repo-gone    gone                missing, prunable                /src/repo-gone",
 		"", "",
-		" enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit",
+		" enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit",
 	}
 	for i, w := range want {
 		if got := strings.TrimRight(stripANSI(rows[i]), " "); got != w {
@@ -248,6 +248,47 @@ func TestPickerScrollsToSelection(t *testing.T) {
 	// Scrolling the list view is separate from the worktree list.
 	if a.scroll != 0 {
 		t.Errorf("list view scroll = %d", a.scroll)
+	}
+}
+
+func TestPickerScrollSideways(t *testing.T) {
+	a := pickerApp(40, 9)
+	a.hscroll = 3 // the list or tree's own sideways scroll
+	a.handleKey(char('l'))
+	rows := a.frame()
+	if a.picker.hscroll != 20 || a.hscroll != 3 {
+		t.Fatalf("picker scrolled %d, list %d; want 20, 3", a.picker.hscroll, a.hscroll)
+	}
+	// Row 2, "  repo-agent   claude/fix-login    1 unstaged, ...", from column 21.
+	if got := stripANSI(rows[2]); got != "e/fix-login    1 unstaged, 1 untracked, " {
+		t.Errorf("row = %q", got)
+	}
+	// The selection highlight still spans the whole width.
+	if !strings.HasPrefix(rows[1], ansiReverse) || visibleLen(rows[1]) != 40 {
+		t.Errorf("selected row = %q (%d wide)", stripANSI(rows[1]), visibleLen(rows[1]))
+	}
+	if footer := stripANSI(rows[8]); !strings.HasSuffix(footer, "col 21 ") {
+		t.Errorf("footer = %q", footer)
+	}
+
+	// While searching, ← and → still scroll; h and l are text.
+	a.handleKey(char('/'))
+	a.handleKey(char('l'))
+	a.handleKey(press(keyLeft))
+	if a.picker.query != "l" || a.picker.hscroll != 0 {
+		t.Errorf("searching: query %q, scrolled %d", a.picker.query, a.picker.hscroll)
+	}
+	a.handleKey(press(keyRight))
+	if a.picker.hscroll != 20 {
+		t.Errorf("→ while searching scrolled %d, want 20", a.picker.hscroll)
+	}
+
+	// Switching worktrees starts the list or tree at the left.
+	a.picker.query = ""
+	a.handleKey(press(keyDown))
+	a.handleKey(press(keyEnter))
+	if a.picker != nil || a.hscroll != 0 {
+		t.Errorf("after switching: picker %v, sideways scroll %d", a.picker, a.hscroll)
 	}
 }
 

@@ -73,6 +73,31 @@ func truncate(s string, width int) string {
 	return b.String()
 }
 
+// skip drops the first n visible runes of s, keeping escape sequences so
+// the rest keeps its colors.
+func skip(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' {
+			j := skipEscape(s, i)
+			b.WriteString(s[i : j+1])
+			i = j + 1
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if n > 0 {
+			n--
+		} else {
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
 // pad right-pads s with spaces to width visible runes.
 func pad(s string, width int) string {
 	if n := visibleLen(s); n < width {

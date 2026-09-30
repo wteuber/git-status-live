@@ -73,6 +73,7 @@ git live
 | `t`, `Tab`              | Toggle between list and tree  |
 | `w`                     | Show the [worktrees](#worktrees) |
 | `↑` `↓`, `k` `j`        | Scroll one line               |
+| `←` `→`, `h` `l`        | Scroll sideways by half a screen |
 | `PgUp` `PgDn`, `Space`  | Scroll one page               |
 | `g` `G`, `Home` `End`   | Jump to top / bottom          |
 | `r`                     | Refresh now                   |
@@ -80,7 +81,12 @@ git live
 The header shows the current view, the name of the worktree (its directory),
 the branch with its upstream and ahead/behind counts, and how many files are
 staged, unstaged, untracked or in conflict. When the list is longer than the
-screen, the footer shows which lines are visible.
+screen, the footer shows which lines are visible (`1-20/57`).
+
+Lines that are wider than the terminal are cut off at the right edge. Scroll
+sideways with `←` `→` (or `h` `l`) to see the rest; the footer then shows the
+first visible column (`col 41`). The header and footer stay in place, and
+switching views or worktrees starts at the left again.
 
 ## Worktrees
 
@@ -95,7 +101,7 @@ them:
   shop-agent-2  claude/add-tests     1 staged, 2 untracked  ~/src/shop-agent-2
   shop-review   (detached 4945c5b)   clean                  ~/src/shop-review
 
- enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit
+ enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit
 ```
 
 Each row shows the worktree's directory name, its branch (or the commit, if
@@ -145,6 +151,7 @@ While you search, the keys type text, except for the ones below.
 | ----------------------- | ----------------------------------------------- |
 | `Enter`                 | Watch the selected worktree                     |
 | `↑` `↓`, `k` `j`        | Select the previous / next worktree             |
+| `←` `→`, `h` `l`        | Scroll sideways, e.g. to see long paths         |
 | `PgUp` `PgDn`, `Space`  | Move the selection by one page                  |
 | `g` `G`, `Home` `End`   | Select the first / last worktree                |
 | `/`                     | Search                                          |
@@ -159,6 +166,7 @@ While searching:
 | Any character           | Add it to the search                            |
 | `Backspace`             | Delete the last character; on an empty search, stop searching |
 | `↑` `↓`, `PgUp` `PgDn`, `Home` `End` | Move the selection among the matches |
+| `←` `→`                 | Scroll sideways                                 |
 | `Enter`                 | Watch the selected worktree                     |
 | `Esc`                   | Clear the search and show all worktrees again   |
 | `Ctrl-C`                | Quit                                            |
@@ -250,7 +258,7 @@ Changes not staged for commit:
 Untracked files:
         cmd/git-live/scratch.txt
 
- q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh
 ```
 
 Press `t` to switch to the tree view:
@@ -266,7 +274,7 @@ Press `t` to switch to the tree view:
 ├── NOTES.md (A+M)
 └── README.md (M)
 
- q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh
+ q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh
 ```
 
 Leave `git live` running while you stage (`git add NOTES.md`), commit or revert

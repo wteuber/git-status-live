@@ -13,6 +13,7 @@ type picker struct {
 	wts       *Worktrees // nil until the first list arrives
 	selected  string     // path of the selected worktree
 	scroll    int
+	hscroll   int    // columns scrolled to the right
 	searching bool   // typing a search
 	query     string // shows only the worktrees that match it
 }
@@ -95,6 +96,10 @@ func (a *app) handlePickerKey(k key) (quit, refresh bool) {
 			a.switchTo(items[i].Path)
 		}
 		return false, false
+	case k.code == keyLeft, k.is('h'):
+		p.hscroll -= a.panStep()
+	case k.code == keyRight, k.is('l'):
+		p.hscroll += a.panStep() // clamped when drawing
 	case k.code == keyUp, k.is('k'):
 		i--
 	case k.code == keyDown, k.is('j'):
@@ -122,7 +127,7 @@ func (a *app) switchTo(path string) {
 	}
 	a.dir = path
 	a.status = nil
-	a.scroll = 0
+	a.scroll, a.hscroll = 0, 0
 }
 
 func (a *app) pickerHeader() string {
@@ -185,7 +190,8 @@ func (a *app) pickerBody() ([]string, int) {
 	for i, r := range rows {
 		if i == sel {
 			line := r.mark + pad(r.name, nameW) + "  " + pad(r.branch, branchW) + "  " + pad(r.summary, summaryW) + "  " + r.path
-			lines[i] = ansiReverse + pad(truncate(line, a.width), a.width) + ansiReset
+			// The highlight spans the screen, also when scrolled sideways.
+			lines[i] = ansiReverse + pad(line, a.width+p.hscroll) + ansiReset
 			continue
 		}
 		lines[i] = r.mark + blue(pad(r.name, nameW)) + "  " + green(pad(r.branch, branchW)) + "  " +

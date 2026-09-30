@@ -470,6 +470,7 @@ func TestDecodeKeysMore(t *testing.T) {
 		want []key
 	}{
 		{"\x1bOA\x1bOB", []key{press(keyUp), press(keyDown)}}, // application cursor mode
+		{"\x1b[C\x1b[D\x1bOC\x1bOD", []key{press(keyRight), press(keyLeft), press(keyRight), press(keyLeft)}},
 		{"\x1b[H\x1b[F\x1b[1~\x1b[4~\x1b[7~\x1b[8~", []key{press(keyHome), press(keyEnd),
 			press(keyHome), press(keyEnd), press(keyHome), press(keyEnd)}},
 		{"\x1b[", nil},                             // incomplete sequence at the end of a read
@@ -523,6 +524,68 @@ func TestScroll(t *testing.T) {
 		}
 	}
 	if footer := stripANSI(a.frame()[6]); !strings.Contains(footer, "1-5/21") {
+		t.Errorf("footer = %q", footer)
+	}
+}
+
+func TestScrollSideways(t *testing.T) {
+	long := Entry{X: '?', Y: '?', Path: "a/very/long/path/that/does/not/fit.txt"}
+	// 20 columns: the widest line is 8 spaces + the 38 character path = 46.
+	a := &app{width: 20, height: 5, status: &Status{Branch: "main", Entries: []Entry{long}}}
+	row := func() string { return stripANSI(a.frame()[2]) }
+	footer := func() string { return stripANSI(a.frame()[4]) }
+
+	if got := row(); got != "        a/very/long/" {
+		t.Fatalf("row = %q", got)
+	}
+	for _, step := range []struct {
+		key       key
+		row, col  string
+		wantScrol int
+	}{
+		{char('l'), "very/long/path/that/", "col 11", 10}, // half the screen
+		{press(keyRight), "path/that/does/not/f", "col 21", 20},
+		{press(keyRight), "that/does/not/fit.txt"[1:], "col 27", 26}, // up to the end of the widest line
+		{char('h'), "ong/path/that/does/n", "col 17", 16},
+		{press(keyLeft), "  a/very/long/path/t", "col 7", 6},
+		{press(keyLeft), "        a/very/long/", "", 0}, // not before the start
+	} {
+		a.handleKey(step.key)
+		if got := row(); got != step.row || a.hscroll != step.wantScrol {
+			t.Errorf("after %+v: row %q, scrolled %d; want %q, %d", step.key, got, a.hscroll, step.row, step.wantScrol)
+		}
+		if f := footer(); (step.col == "") != !strings.Contains(f, "col ") || !strings.Contains(f, step.col) {
+			t.Errorf("after %+v: footer %q, want %q", step.key, f, step.col)
+		}
+	}
+
+	// The header stays put, and toggling the view starts at the left.
+	a.handleKey(char('l'))
+	if got := stripANSI(a.frame()[0]); !strings.HasPrefix(got, " LIST") {
+		t.Errorf("header scrolled: %q", got)
+	}
+	a.handleKey(char('t'))
+	if a.hscroll != 0 {
+		t.Errorf("toggle kept the sideways scroll: %d", a.hscroll)
+	}
+
+	// Content that fits can't be scrolled sideways.
+	a = &app{width: 80, height: 5, status: &Status{Branch: "main", Entries: []Entry{long}}}
+	a.handleKey(char('l'))
+	a.frame()
+	if a.hscroll != 0 {
+		t.Errorf("scrolled content that fits: %d", a.hscroll)
+	}
+}
+
+func TestFooterWithBothPositions(t *testing.T) {
+	var many []Entry
+	for i := range 20 {
+		many = append(many, Entry{X: '?', Y: '?', Path: fmt.Sprintf("dir/%02d/%s", i, strings.Repeat("x", 60))})
+	}
+	a := &app{width: 40, height: 7, status: &Status{Branch: "main", Entries: many}}
+	a.handleKey(char('l'))
+	if footer := stripANSI(a.frame()[6]); !strings.HasSuffix(footer, "col 21  1-5/21 ") || visibleLen(footer) != 40 {
 		t.Errorf("footer = %q", footer)
 	}
 }

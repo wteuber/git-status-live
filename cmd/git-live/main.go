@@ -37,6 +37,8 @@ const (
 	keyTab
 	keyUp
 	keyDown
+	keyLeft
+	keyRight
 	keyPageUp
 	keyPageDown
 	keyHome
@@ -60,6 +62,7 @@ type app struct {
 	status   *Status // nil until the first run in dir finishes
 	view     view
 	scroll   int
+	hscroll  int     // columns scrolled to the right
 	picker   *picker // the worktree list, while it is shown
 	width    int
 	height   int
@@ -75,8 +78,8 @@ type config struct {
 
 const usage = `Usage: git live [-i interval] [-u] [--view list|tree] [path]
 
-Live git status. Keys: q quit, t/Tab toggle list/tree, w worktrees, ↑↓/jk scroll,
-r refresh.
+Live git status. Keys: q quit, t/Tab toggle list/tree, w worktrees,
+↑↓←→/hjkl scroll, r refresh.
 
   -i duration        refresh interval, e.g. 250ms or 2s (default 500ms)
   -u, --untracked    show untracked files in new directories
@@ -394,6 +397,10 @@ func decodeKeys(b []byte) []key {
 				keys = append(keys, key{code: keyUp})
 			case "B":
 				keys = append(keys, key{code: keyDown})
+			case "C":
+				keys = append(keys, key{code: keyRight})
+			case "D":
+				keys = append(keys, key{code: keyLeft})
 			case "5~":
 				keys = append(keys, key{code: keyPageUp})
 			case "6~":
@@ -433,7 +440,11 @@ func (a *app) handleKey(k key) (quit, refresh bool) {
 		a.openPicker()
 	case k.code == keyTab, k.is('t'), k.is('T'):
 		a.view = 1 - a.view
-		a.scroll = 0
+		a.scroll, a.hscroll = 0, 0
+	case k.code == keyLeft, k.is('h'):
+		a.hscroll -= a.panStep()
+	case k.code == keyRight, k.is('l'):
+		a.hscroll += a.panStep() // clamped when drawing
 	case k.code == keyUp, k.is('k'):
 		a.scroll--
 	case k.code == keyDown, k.is('j'):
@@ -449,6 +460,9 @@ func (a *app) handleKey(k key) (quit, refresh bool) {
 	}
 	return false, false
 }
+
+// panStep is how far ← and → scroll: half the screen, like less.
+func (a *app) panStep() int { return max(a.width/2, 1) }
 
 // draw returns the escape sequence that paints the whole screen.
 func (a *app) draw() string {
@@ -466,19 +480,25 @@ func (a *app) frame() []string {
 	}
 	bodyH := a.bodyHeight()
 	body, sel := a.body()
-	scroll := &a.scroll
-	footer := " q quit  t/Tab toggle view  w worktrees  ↑↓/jk scroll  r refresh"
+	scroll, hscroll := &a.scroll, &a.hscroll
+	footer := " q quit  t/Tab toggle view  w worktrees  ↑↓←→/hjkl scroll  r refresh"
 	if a.picker != nil {
-		scroll = &a.picker.scroll
+		scroll, hscroll = &a.picker.scroll, &a.picker.hscroll
 		if sel >= 0 { // keep the selection on the screen
 			*scroll = max(min(*scroll, sel), sel-bodyH+1)
 		}
-		footer = " enter switch  ↑↓/jk select  / search  w/esc back  r refresh  q quit"
+		footer = " enter switch  ↑↓/jk select  ←→/hl scroll  / search  w/esc back  r refresh  q quit"
 		if a.picker.searching {
-			footer = " type to search  enter switch  ↑↓ select  esc clear  ctrl-c quit"
+			footer = " type to search  enter switch  ↑↓ select  ←→ scroll  esc clear  ctrl-c quit"
 		}
 	}
 	*scroll = min(max(*scroll, 0), max(len(body)-bodyH, 0))
+	// Scroll sideways at most until the end of the widest line is visible.
+	widest := 0
+	for _, l := range body {
+		widest = max(widest, visibleLen(l))
+	}
+	*hscroll = min(max(*hscroll, 0), max(widest-a.width, 0))
 
 	rows := make([]string, 0, a.height)
 	rows = append(rows, ansiReverse+pad(truncate(a.header(), a.width), a.width)+ansiReset)
@@ -487,11 +507,18 @@ func (a *app) frame() []string {
 		if n := *scroll + i; n < len(body) {
 			line = body[n]
 		}
-		rows = append(rows, truncate(line, a.width))
+		rows = append(rows, truncate(skip(line, *hscroll), a.width))
 	}
 	if a.height > 1 {
+		var parts []string
+		if *hscroll > 0 {
+			parts = append(parts, fmt.Sprintf("col %d", *hscroll+1))
+		}
 		if len(body) > bodyH {
-			pos := fmt.Sprintf("%d-%d/%d ", *scroll+1, min(*scroll+bodyH, len(body)), len(body))
+			parts = append(parts, fmt.Sprintf("%d-%d/%d", *scroll+1, min(*scroll+bodyH, len(body)), len(body)))
+		}
+		if len(parts) > 0 {
+			pos := strings.Join(parts, "  ") + " "
 			// Shorten the key hints, not the position, on narrow terminals.
 			w := max(a.width-len(pos), 0)
 			if r := []rune(footer); len(r) >= w {
