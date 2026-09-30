@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-30
+
 ### Added
 - Worktree list: `w` shows every worktree of the repository with its branch (or detached commit), a colored summary of its changes and its path, refreshed every interval while it is open. The list appears right away, and each summary shows `loading…` until git status in that worktree finishes. The watched worktree is marked with `*`. Locked worktrees are marked `locked`; prunable worktrees and bare repositories are listed but can't be selected.
 - Switch worktrees: select one with `↑`/`↓`/`j`/`k`, `PgUp`/`PgDn`/`Space` or `g`/`G`/`Home`/`End` and press `Enter` to watch it instead. `w` or `Esc` go back without switching.
@@ -41,6 +43,7 @@ First release.
 - Installation with a single command that also sets up the `git live` alias.
 - CI on Linux, macOS and Windows with the minimum and latest Go versions, and a minimum test coverage of 89%.
 
-[Unreleased]: https://github.com/wteuber/git-status-live/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/wteuber/git-status-live/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/wteuber/git-status-live/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/wteuber/git-status-live/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wteuber/git-status-live/releases/tag/v0.1.0
