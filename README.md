@@ -224,14 +224,58 @@ before it runs the alias. Use `git live -h`, or run the binary directly with
 
 ## Configuration
 
-To always start in the tree view, set `live.view` in your git config:
+git live is configured with `git config`, like git itself. There are no
+configuration files of its own.
+
+#### Settings
+
+| Setting      | Values           | Default | Command line | Effect                    |
+| ------------ | ---------------- | ------- | ------------ | ------------------------- |
+| `live.view`  | `list` or `tree` | `list`  | `--view`     | The view git live starts in |
+
+For example, to always start in the tree view:
 
 ```
 git config --global live.view tree
 ```
 
-Leave out `--global` to set it for the current repository only. `--view`
-overrides it for a single run, e.g. `git live --view list`.
+#### Global or per repository
+
+- `git config --global live.view tree` sets it for all your repositories, in
+  `~/.gitconfig`.
+- `git config live.view tree`, run inside a repository, sets it for that
+  repository only, in its `.git/config`. It takes precedence over the global
+  setting, and applies to all worktrees of the repository.
+- On the command line, `--view` takes precedence over both, for a single run:
+  `git live --view list`.
+
+git live reads the settings of the repository it watches, so
+`git live ~/src/other-repo` uses the settings of `other-repo`.
+
+#### Check and undo
+
+```
+git config --get live.view                        # the value git live uses here
+git config --show-origin --get-regexp '^live\.'   # every live.* setting, and where it is set
+git config --global --unset live.view             # back to the default
+```
+
+A value git live doesn't know stops it with an error that names the setting,
+e.g. `git live: git config live.view: unknown view "grid", want list or tree`.
+
+#### Options in the alias
+
+The `live` alias from the [installation](#installation) is git config too. Add
+options to it to use them every time, e.g. to always list untracked files one
+by one and refresh every 250ms:
+
+```
+git config --global alias.live '!exec ~/go/bin/git-live -u -i 250ms'
+```
+
+Options and a path given on the command line are added after them, so
+`git live --view tree ~/src/shop` still works. `u` still toggles untracked
+files while git live runs.
 
 ## Try it
 
