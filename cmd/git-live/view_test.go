@@ -95,6 +95,22 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestSkip(t *testing.T) {
+	s := red("héllo") + " world"
+	if got := skip(s, 2); got != ansiRed+"llo"+ansiReset+" world" {
+		t.Errorf("skip(2) = %q", got) // keeps the color of what is left
+	}
+	if got := skip(s, 0); got != s {
+		t.Errorf("skip(0) = %q", got)
+	}
+	if got := stripANSI(skip(s, 100)); got != "" {
+		t.Errorf("skip past the end = %q", got)
+	}
+	if got := skip("日本語", 1); got != "本語" {
+		t.Errorf("skip multi-byte = %q", got)
+	}
+}
+
 var conflicts = []Entry{
 	{X: 'U', Y: 'U', Path: "src/both.go"},
 	{X: 'A', Y: 'A', Path: "added.go"},

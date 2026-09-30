@@ -143,6 +143,9 @@ func TestRunStatus(t *testing.T) {
 	if st.Err != nil {
 		t.Fatal(st.Err)
 	}
+	if !st.Untracked || st.Dir != dir {
+		t.Errorf("status records dir %q, untracked %v", st.Dir, st.Untracked)
+	}
 	want = []Entry{
 		{X: ' ', Y: 'M', Path: "changed.txt"},
 		{X: 'R', Y: ' ', Path: "new name.txt", OrigPath: "old name.txt"},
@@ -188,8 +191,17 @@ func TestRunStatusGitFailures(t *testing.T) {
 		t.Errorf("missing git error = %v", st.Err)
 	}
 
-	// A git that fails without printing anything: this test binary, renamed,
-	// exits 1 when GIT_LIVE_FAKE_GIT is set (see TestMain).
+	silentFailingGit(t)
+	if st := runStatus(".", false); st.Err == nil || st.Err.Error() != "exit status 1" {
+		t.Errorf("silent git failure error = %v, want exit status 1", st.Err)
+	}
+}
+
+// silentFailingGit puts a git on the PATH that exits 1 without printing
+// anything: this test binary, renamed, with GIT_LIVE_FAKE_GIT set (see
+// TestMain).
+func silentFailingGit(t *testing.T) {
+	t.Helper()
 	bin := t.TempDir()
 	name := "git"
 	if runtime.GOOS == "windows" {
@@ -204,7 +216,4 @@ func TestRunStatusGitFailures(t *testing.T) {
 	}
 	t.Setenv("PATH", bin)
 	t.Setenv("GIT_LIVE_FAKE_GIT", "silent-failure")
-	if st := runStatus(".", false); st.Err == nil || st.Err.Error() != "exit status 1" {
-		t.Errorf("silent git failure error = %v, want exit status 1", st.Err)
-	}
 }
